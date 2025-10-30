@@ -9,18 +9,28 @@ from pathlib import Path
 # Find project root by walking up directory tree until we find 'src' directory
 # This handles cases where app.py might be in different locations (local vs Render)
 def find_project_root():
-    """Find the project root directory by looking for 'src' subdirectory."""
-    current = Path(__file__).resolve()
+    """
+    Find the project root directory by looking for 'src' subdirectory.
+    Handles case where app.py might be in src/ subdirectory itself.
+    """
+    current_file = Path(__file__).resolve()
     
-    # Walk up the directory tree
-    for parent in [current] + list(current.parents):
-        # Check if 'src' directory exists here
+    # If app.py is inside a 'src' directory, go up one level
+    parts = current_file.parts
+    if 'src' in parts:
+        src_idx = parts.index('src')
+        # If src is not the last part, we're inside src - go up to project root
+        if src_idx < len(parts) - 1:
+            return Path(*parts[:src_idx + 1]).parent
+    
+    # Walk up the directory tree looking for a 'src' subdirectory
+    for parent in [current_file.parent] + list(current_file.parents):
         src_dir = parent / 'src'
         if src_dir.exists() and src_dir.is_dir():
             return parent
     
-    # Fallback: use parent of app.py
-    return current.parent
+    # Fallback: use parent of current file
+    return current_file.parent
 
 # Add project root to Python path (needed for Render.com deployment)
 project_root = find_project_root()
@@ -31,24 +41,29 @@ paths_to_add = [
     str(project_root),
     str(current_dir),
     str(Path(__file__).parent.absolute()),
+    # Handle case where app.py might be in src/ - need parent directory
+    str(Path(__file__).parent.parent.absolute()),
 ]
 
 for path in paths_to_add:
-    normalized_path = os.path.normpath(path)
-    if normalized_path not in sys.path:
+    normalized_path = os.path.normpath(os.path.abspath(path))
+    if normalized_path not in sys.path and os.path.exists(normalized_path):
         sys.path.insert(0, normalized_path)
 
-# Debug: Print paths for troubleshooting
-print(f"[Path Debug] Project root found: {project_root}")
-print(f"[Path Debug] Current working directory: {current_dir}")
-print(f"[Path Debug] __file__ location: {__file__}")
-try:
-    if 'src' in os.listdir(project_root):
-        print(f"[Path Debug] ✓ 'src' directory found in project root")
-    else:
-        print(f"[Path Debug] ✗ 'src' directory NOT found in project root!")
-except Exception as e:
-    print(f"[Path Debug] Could not check for 'src' directory: {e}")
+# Debug: Print paths for troubleshooting (critical for Render debugging)
+print("=" * 70)
+print("[DEPLOYMENT DEBUG] Python Path Configuration")
+print("=" * 70)
+print(f"__file__ location: {__file__}")
+print(f"__file__ resolved: {Path(__file__).resolve()}")
+print(f"Current working directory: {current_dir}")
+print(f"Project root determined: {project_root}")
+print(f"Project root exists: {project_root.exists()}")
+print(f"src/ in project root exists: {(project_root / 'src').exists()}")
+print(f"sys.path (first 5 entries):")
+for i, p in enumerate(sys.path[:5], 1):
+    print(f"  {i}. {p}")
+print("=" * 70)
 
 from flask import Flask, render_template, request, jsonify
 from src.web.player_stats import PlayerStatsDB
