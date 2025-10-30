@@ -367,6 +367,41 @@
                 padding: 25px;
             }
         }
+        .info-icon {
+            display: inline-block;
+            cursor: pointer;
+            color: #a5f3fc;
+            position: relative;
+            font-size: 1em;
+            margin-left: 4px;
+            vertical-align: middle;
+        }
+        .info-tooltip {
+            visibility: hidden;
+            opacity: 0;
+            background: #23272f;
+            color: #e8e9ea;
+            padding: 12px 14px;
+            border-radius: 8px;
+            font-size: 0.97em;
+            font-weight: 400;
+            box-shadow: 0 2px 16px rgba(0,0,0,0.18);
+            position: absolute;
+            bottom: calc(100% + 6px);
+            left: 50%;
+            transform: translateX(-50%);
+            white-space: pre-line;
+            z-index: 15;
+            transition: opacity 0.18s;
+            min-width: 200px;
+            pointer-events: none;
+            text-align: left;
+        }
+        .info-icon:hover .info-tooltip {
+            visibility: visible;
+            opacity: 1;
+            pointer-events: auto;
+        }
     </style>
 </head>
 <body>
@@ -464,6 +499,15 @@
         const error = document.getElementById('error');
         const submitBtn = document.getElementById('submitBtn');
         const valueBetsBtn = document.getElementById('valueBetsBtn');
+
+        function autoSetBestOf5() {
+            const level = document.getElementById('tourney_level').value;
+            const bo5 = document.getElementById('best_of_5');
+            bo5.checked = (level === 'G');
+        }
+
+        document.getElementById('tourney_level').addEventListener('change', autoSetBestOf5);
+        window.addEventListener('DOMContentLoaded', autoSetBestOf5);
 
         form.addEventListener('submit', async (e) => {
             e.preventDefault();
@@ -564,18 +608,65 @@
             }
         });
 
+        let latestPredictions = null;
+
+        function displayResults(data) {
+            const modelExplanations = {
+                'Decision Tree': 'A single tree of if/else rules that splits on features (like Elo, surface) to predict the winner. Simple, fast, can overfit.',
+                'Random Forest': 'Many decision trees on shuffled data. Their predictions are averaged for robust, accurate results. Often best for tabular sports data.',
+                'XGBoost': 'Highly accurate boosted ensemble of decision trees that learn sequentially from errors. State-of-the-art on most ML competitions.'
+            };
+            playerInfo.innerHTML = `
+                <div class="player-card">
+                    <div class="player-name">${data.player1.name}</div>
+                    <div class="player-details">
+                        <div><strong>Elo Rating:</strong> ${data.player1.elo}</div>
+                        ${data.player1.age ? `<div><strong>Age:</strong> ${data.player1.age}</div>` : ''}
+                        ${data.player1.height ? `<div><strong>Height:</strong> ${data.player1.height} cm</div>` : ''}
+                    </div>
+                </div>
+                <div class="player-card">
+                    <div class="player-name">${data.player2.name}</div>
+                    <div class="player-details">
+                        <div><strong>Elo Rating:</strong> ${data.player2.elo}</div>
+                        ${data.player2.age ? `<div><strong>Age:</strong> ${data.player2.age}</div>` : ''}
+                        ${data.player2.height ? `<div><strong>Height:</strong> ${data.player2.height} cm</div>` : ''}
+                    </div>
+                </div>
+            `;
+            const modelOrder = ['Decision Tree', 'Random Forest', 'XGBoost'];
+            let predictionsHTML = '';
+            for (const modelName of modelOrder) {
+                const pred = data.predictions[modelName];
+                if (pred) {
+                    predictionsHTML += `
+                        <div class="prediction-card">
+                            <div class="prediction-header">
+                                ${modelName}
+                                <span class="info-icon">ℹ️
+                                    <span class="info-tooltip">${modelExplanations[modelName]}</span>
+                                </span>
+                            </div>
+                            <div class="prediction-player">
+                                <span class="prediction-player-name">${data.player1.name}</span>
+                                <span class="prediction-percentage">${pred.player1_win_prob}%</span>
+                            </div>
+                            <div class="prediction-player">
+                                <span class="prediction-player-name">${data.player2.name}</span>
+                                <span class="prediction-percentage">${pred.player2_win_prob}%</span>
+                            </div>
+                        </div>
+                    `;
+                }
+            }
+            predictionsDiv.innerHTML = predictionsHTML;
+            latestPredictions = data.predictions;
+        }
+
         function displayValueBets(data) {
             let html = '<div class="right-column-title" style="margin-top: 0;">Value Betting Analysis</div>';
             
-            // Display warning if using mock odds
-            if (data.value_analysis.warning) {
-                html += `
-                    <div style="background: rgba(239, 68, 68, 0.15); border-left: 3px solid #ef4444; padding: 12px; margin-bottom: 15px; border-radius: 6px; color: #fca5a5;">
-                        <div style="font-weight: 600; margin-bottom: 5px; color: #ef4444;">⚠️ WARNING</div>
-                        <div style="font-size: 0.9em; line-height: 1.5;">${data.value_analysis.warning}</div>
-                    </div>
-                `;
-            }
+            // (Removed warning banner per feedback)
             
             // Calculate implied probabilities
             const prob1 = (1 / parseFloat(data.match.player1.odds) * 100).toFixed(1);
@@ -586,7 +677,9 @@
                 <div class="prediction-card" style="margin-bottom: 20px;">
                     <div class="prediction-header" style="display: flex; align-items: center; gap: 8px;">
                         Current Odds
-                        <span class="odds-info-icon" title="Decimal odds: Bet $1 to get back the odds amount. Lower odds = more likely to win. Implied probability = 1/odds.">ℹ️</span>
+                        <span class="info-icon">ℹ️
+                            <span class="info-tooltip">Decimal odds: Bet $1 to get back the odds amount.\nLower odds = more likely to win.\nImplied probability = 1/odds.</span>
+                        </span>
                     </div>
                     <div class="prediction-player">
                         <span class="prediction-player-name">${data.match.player1.name}</span>
@@ -617,8 +710,7 @@
                 const rfRec = data.value_analysis.recommendations.find(r => r.model === "Random Forest");
                 
                 if (rfRec) {
-                    html += `
-                        <div style="padding: 20px 0;">
+                    html += `                        <div style="padding: 20px 0;">
                             <div style="text-align: center; margin-bottom: 20px;">
                                 <div style="font-size: 1.5em; font-weight: 700; color: #6ee7b7; margin-bottom: 8px;">
                                     Bet on ${rfRec.bet_on}
@@ -628,14 +720,45 @@
                             
                             <div style="display: flex; justify-content: space-around; padding: 20px; background: rgba(110, 231, 183, 0.1); border-radius: 8px;">
                                 <div style="text-align: center;">
-                                    <div style="font-size: 0.9em; color: #9ca3af; margin-bottom: 5px;">Odds</div>
+                                    <div style="font-size: 0.9em; color: #9ca3af; margin-bottom: 5px;">
+                                        Odds
+                                        <span class="info-icon">ℹ️
+                                            <span class="info-tooltip">Decimal odds = potential payout per $1 bet (incl. stake).\nExample: Odds 1.50 — $10 bet returns $15 if correct.</span>
+                                        </span>
+                                    </div>
                                     <div style="font-size: 1.8em; font-weight: 700; color: #6ee7b7;">${rfRec.odds}</div>
                                 </div>
                                 <div style="width: 1px; background: rgba(75, 85, 99, 0.3);"></div>
                                 <div style="text-align: center;">
-                                    <div style="font-size: 0.9em; color: #9ca3af; margin-bottom: 5px;">Kelly</div>
+                                    <div style="font-size: 0.9em; color: #9ca3af; margin-bottom: 5px;">
+                                        Kelly
+                                        <span class="info-icon">ℹ️
+                                            <span class="info-tooltip">Kelly % = optimal bankroll fraction for max growth.\nFormula: ([Chance x Odds] - 1) / (Odds - 1)</span>
+                                        </span>
+                                    </div>
                                     <div style="font-size: 1.8em; font-weight: 700; color: #6ee7b7;">${rfRec.kelly_percent}%</div>
                                 </div>
+                            </div>
+                            <div style="margin-top:16px; padding-top:12px; border-top:1px solid rgba(75,85,99,0.3); color:#9ca3af; font-size:0.95em; line-height:1.6;">
+                                <div style="font-weight:600; color:#e5e7eb; margin-bottom:6px;">Why this is recommended</div>
+                                ${(() => {
+                                    try {
+                                        if (!latestPredictions || !latestPredictions['Random Forest']) return '';
+                                        const preds = latestPredictions['Random Forest'];
+                                        const betOnP1 = rfRec.bet_on === data.match.player1.name;
+                                        let modelPctStr;
+                                        if (betOnP1) {
+                                            modelPctStr = parseFloat(preds.player1_win_prob).toFixed(2);
+                                        } else {
+                                            modelPctStr = parseFloat(preds.player2_win_prob).toFixed(2);
+                                        }
+                                        const modelProb = parseFloat(modelPctStr) / 100;
+                                        const implied = 1 / parseFloat(rfRec.odds);
+                                        const impliedPct = (implied * 100).toFixed(2);
+                                        const edge = ((modelProb - implied) * 100).toFixed(2);
+                                        return `Our model estimates a ${modelPctStr}% chance vs implied ${impliedPct}% from the odds — a +${edge}% edge. Factors considered: overall Elo, surface-specific Elo, recent form, and head‑to‑head.`;
+                                    } catch { return ''; }
+                                })()}
                             </div>
                         </div>
                     `;
@@ -647,51 +770,7 @@
             
             valueBetsDiv.innerHTML = html;
         }
-
-        function displayResults(data) {
-            playerInfo.innerHTML = `
-                <div class="player-card">
-                    <div class="player-name">${data.player1.name}</div>
-                    <div class="player-details">
-                        <div><strong>Elo Rating:</strong> ${data.player1.elo}</div>
-                        ${data.player1.age ? `<div><strong>Age:</strong> ${data.player1.age}</div>` : ''}
-                        ${data.player1.height ? `<div><strong>Height:</strong> ${data.player1.height} cm</div>` : ''}
-                    </div>
-                </div>
-                <div class="player-card">
-                    <div class="player-name">${data.player2.name}</div>
-                    <div class="player-details">
-                        <div><strong>Elo Rating:</strong> ${data.player2.elo}</div>
-                        ${data.player2.age ? `<div><strong>Age:</strong> ${data.player2.age}</div>` : ''}
-                        ${data.player2.height ? `<div><strong>Height:</strong> ${data.player2.height} cm</div>` : ''}
-                    </div>
-                </div>
-            `;
-
-            const modelOrder = ['Decision Tree', 'Random Forest', 'XGBoost'];
-            let predictionsHTML = '';
-            
-            for (const modelName of modelOrder) {
-                const pred = data.predictions[modelName];
-                if (pred) {
-                    predictionsHTML += `
-                        <div class="prediction-card">
-                            <div class="prediction-header">${modelName}</div>
-                            <div class="prediction-player">
-                                <span class="prediction-player-name">${data.player1.name}</span>
-                                <span class="prediction-percentage">${pred.player1_win_prob}%</span>
-                            </div>
-                            <div class="prediction-player">
-                                <span class="prediction-player-name">${data.player2.name}</span>
-                                <span class="prediction-percentage">${pred.player2_win_prob}%</span>
-                            </div>
-                        </div>
-                    `;
-                }
-            }
-            
-            predictionsDiv.innerHTML = predictionsHTML;
-        }
     </script>
 </body>
 </html>
+

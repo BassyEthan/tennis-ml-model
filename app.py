@@ -176,9 +176,14 @@ def predict():
     player1_name = data.get('player1', '').strip()
     player2_name = data.get('player2', '').strip()
     surface = data.get('surface', 'Hard')
-    best_of_5 = data.get('best_of_5', False)
     round_code = int(data.get('round_code', 7))
     tourney_level = data.get('tourney_level', 'A')
+    # Auto-decide best of 5 based on tournament level (Grand Slams are best-of-5 in men's singles)
+    # If caller explicitly passes a boolean, we respect it; otherwise infer from level
+    if 'best_of_5' in data and isinstance(data.get('best_of_5'), bool):
+        best_of_5 = data.get('best_of_5')
+    else:
+        best_of_5 = (tourney_level == 'G')
     
     # Map tournament level to code
     level_map = {"F": 1, "C": 1, "A": 2, "M": 3, "G": 4}
@@ -282,10 +287,16 @@ def calculate_value_bets():
     h2h_diff = player_db.get_h2h(p1_id, p2_id)
     
     # Use default match parameters for odds lookup
+    # Auto-decide best-of-5 for value bets as well
+    if 'best_of_5' in data and isinstance(data.get('best_of_5'), bool):
+        best_of_5 = data.get('best_of_5')
+    else:
+        best_of_5 = (data.get('tourney_level', 'A') == 'G')
+
     features_df = predictor.build_features(
         p1_stats, p2_stats,
         surface=data.get('surface', 'Hard'),
-        best_of_5=data.get('best_of_5', False),
+        best_of_5=best_of_5,
         round_code=int(data.get('round_code', 7)),
         tourney_level_code=int(data.get('tourney_level_code', 2)),
         h2h_diff=h2h_diff
