@@ -104,6 +104,11 @@ except ModuleNotFoundError:
 
 app = Flask(__name__)
 
+# Health check endpoint for Render
+@app.route('/healthz', methods=['GET'])
+def healthz():
+	return 'ok', 200
+
 # Global instances (loaded on startup)
 player_db = None
 predictor = None
