@@ -86,9 +86,21 @@ for i, p in enumerate(sys.path[:5], 1):
 print("=" * 70)
 
 from flask import Flask, render_template, request, jsonify
-from src.web.player_stats import PlayerStatsDB
-from src.web.predictor import MatchPredictor
-from src.betting.odds_fetcher import OddsFetcher, ValueBetCalculator
+# Robust imports that work whether 'src' is on sys.path or not
+try:
+	from src.web.player_stats import PlayerStatsDB
+	from src.web.predictor import MatchPredictor
+	from src.betting.odds_fetcher import OddsFetcher, ValueBetCalculator
+except ModuleNotFoundError:
+	# Fallback: add ./src to sys.path and import without the 'src.' prefix
+	src_path = Path(__file__).parent / 'src'
+	if src_path.exists():
+		sp = str(src_path.resolve())
+		if sp not in sys.path:
+			sys.path.insert(0, sp)
+		from web.player_stats import PlayerStatsDB
+		from web.predictor import MatchPredictor
+		from betting.odds_fetcher import OddsFetcher, ValueBetCalculator
 
 app = Flask(__name__)
 
