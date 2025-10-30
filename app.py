@@ -2,11 +2,19 @@
 Flask web application for tennis match predictions.
 """
 
+import os
+import sys
+from pathlib import Path
+
+# Add project root to Python path (needed for Render.com deployment)
+project_root = Path(__file__).parent.absolute()
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
 from flask import Flask, render_template, request, jsonify
 from src.web.player_stats import PlayerStatsDB
 from src.web.predictor import MatchPredictor
 from src.betting.odds_fetcher import OddsFetcher, ValueBetCalculator
-import os
 
 app = Flask(__name__)
 
