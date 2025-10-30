@@ -1,0 +1,25 @@
+🔧 URGENT: Fix Render Configuration
+
+The issue is that Render is NOT using your Procfile and has wrong settings.
+
+STEPS TO FIX:
+
+1. Go to Render Dashboard → Your Service → Settings
+
+2. Check "Start Command":
+   ❌ WRONG: (empty or python3 app.py)
+   ✅ CORRECT: gunicorn app:app
+
+3. Check "Root Directory":
+   ❌ WRONG: src/ or src
+   ✅ CORRECT: . (dot) or leave EMPTY
+
+4. Clear Build Cache:
+   - Settings → Scroll down
+   - Click "Clear build cache"
+   
+5. Save and Redeploy
+
+The Root Directory being set to "src/" is why app.py appears at 
+/opt/render/project/src/app.py - that's the problem!
+

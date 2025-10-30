@@ -2,9 +2,29 @@
 Flask web application for tennis match predictions.
 """
 
+# CRITICAL: Path setup MUST happen IMMEDIATELY before ANY other imports
 import os
 import sys
 from pathlib import Path
+
+# Add ALL possible paths immediately - don't wait for function calls
+_current_file_path = Path(__file__).resolve()
+_all_possible_roots = [
+    _current_file_path.parent,           # app.py in root
+    _current_file_path.parent.parent,    # app.py in src/
+    Path('/opt/render/project'),         # Render default
+    Path.cwd(),                          # Current directory
+]
+
+# Add paths immediately
+for root in _all_possible_roots:
+    try:
+        root_abs = root.absolute()
+        root_str = str(root_abs)
+        if root_abs.exists() and root_str not in sys.path:
+            sys.path.insert(0, root_str)
+    except:
+        pass
 
 # Find project root by walking up directory tree until we find 'src' directory
 # This handles cases where app.py might be in different locations (local vs Render)
