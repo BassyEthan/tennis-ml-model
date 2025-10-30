@@ -6,10 +6,49 @@ import os
 import sys
 from pathlib import Path
 
+# Find project root by walking up directory tree until we find 'src' directory
+# This handles cases where app.py might be in different locations (local vs Render)
+def find_project_root():
+    """Find the project root directory by looking for 'src' subdirectory."""
+    current = Path(__file__).resolve()
+    
+    # Walk up the directory tree
+    for parent in [current] + list(current.parents):
+        # Check if 'src' directory exists here
+        src_dir = parent / 'src'
+        if src_dir.exists() and src_dir.is_dir():
+            return parent
+    
+    # Fallback: use parent of app.py
+    return current.parent
+
 # Add project root to Python path (needed for Render.com deployment)
-project_root = Path(__file__).parent.absolute()
-if str(project_root) not in sys.path:
-    sys.path.insert(0, str(project_root))
+project_root = find_project_root()
+current_dir = Path.cwd()
+
+# Add multiple possible paths to ensure imports work
+paths_to_add = [
+    str(project_root),
+    str(current_dir),
+    str(Path(__file__).parent.absolute()),
+]
+
+for path in paths_to_add:
+    normalized_path = os.path.normpath(path)
+    if normalized_path not in sys.path:
+        sys.path.insert(0, normalized_path)
+
+# Debug: Print paths for troubleshooting
+print(f"[Path Debug] Project root found: {project_root}")
+print(f"[Path Debug] Current working directory: {current_dir}")
+print(f"[Path Debug] __file__ location: {__file__}")
+try:
+    if 'src' in os.listdir(project_root):
+        print(f"[Path Debug] ✓ 'src' directory found in project root")
+    else:
+        print(f"[Path Debug] ✗ 'src' directory NOT found in project root!")
+except Exception as e:
+    print(f"[Path Debug] Could not check for 'src' directory: {e}")
 
 from flask import Flask, render_template, request, jsonify
 from src.web.player_stats import PlayerStatsDB
