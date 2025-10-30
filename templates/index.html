@@ -1,0 +1,697 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tennis Match Predictor</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #1a1d24 0%, #151821 100%);
+            min-height: 100vh;
+            padding: 30px 20px;
+            color: #e8e9ea;
+        }
+
+        .container {
+            max-width: 1600px;
+            margin: 0 auto;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 50px;
+            padding-bottom: 30px;
+        }
+
+        h1 {
+            color: #6ee7b7;
+            font-weight: 800;
+            font-size: 3.5em;
+            letter-spacing: -2px;
+            margin-bottom: 15px;
+            text-transform: uppercase;
+        }
+
+        .subtitle {
+            color: #9ca3af;
+            font-weight: 300;
+            font-size: 1.2em;
+            letter-spacing: 0.5px;
+        }
+
+        .main-content {
+            display: grid;
+            grid-template-columns: 480px 1fr;
+            gap: 50px;
+        }
+
+        .left-column, .right-column {
+            background: rgba(26, 29, 36, 0.7);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(75, 85, 99, 0.3);
+            border-radius: 28px;
+            padding: 45px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+        }
+
+        .right-column {
+            min-height: 600px;
+        }
+
+        .form-group {
+            margin-bottom: 28px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 12px;
+            color: #6ee7b7;
+            font-weight: 600;
+            font-size: 0.9em;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        input[type="text"],
+        select {
+            width: 100%;
+            padding: 16px 20px;
+            background: rgba(31, 41, 55, 0.5);
+            border: 2px solid rgba(75, 85, 99, 0.4);
+            border-radius: 14px;
+            color: #e8e9ea;
+            font-size: 15px;
+            font-family: 'Inter', sans-serif;
+            transition: all 0.3s ease;
+        }
+
+        input[type="text"]:focus,
+        select:focus {
+            outline: none;
+            border-color: #6ee7b7;
+            background: rgba(31, 41, 55, 0.7);
+            box-shadow: 0 0 0 4px rgba(110, 231, 183, 0.15), 0 4px 12px rgba(110, 231, 183, 0.2);
+            transform: translateY(-1px);
+        }
+
+        select {
+            cursor: pointer;
+        }
+
+        select option {
+            background: #1f2937;
+            color: #e8e9ea;
+        }
+
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding-top: 10px;
+        }
+
+        input[type="checkbox"] {
+            width: 22px;
+            height: 22px;
+            cursor: pointer;
+            accent-color: #6ee7b7;
+        }
+
+        .checkbox-group label {
+            margin: 0;
+            text-transform: none;
+            letter-spacing: 0;
+            font-weight: 400;
+            font-size: 0.95em;
+        }
+
+        button {
+            width: 100%;
+            padding: 18px;
+            background: linear-gradient(135deg, #6ee7b7 0%, #10b981 100%);
+            color: #0f172a;
+            border: none;
+            border-radius: 16px;
+            font-size: 16px;
+            font-weight: 700;
+            font-family: 'Inter', sans-serif;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin-top: 10px;
+            box-shadow: 0 4px 15px rgba(110, 231, 183, 0.3);
+        }
+
+        button:hover {
+            background: linear-gradient(135deg, #86efac 0%, #6ee7b7 100%);
+            transform: translateY(-3px);
+            box-shadow: 0 8px 25px rgba(110, 231, 183, 0.5);
+        }
+
+        button:active {
+            transform: translateY(0);
+        }
+
+        button:disabled {
+            background: rgba(75, 85, 99, 0.4);
+            color: #9ca3af;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #6ee7b7;
+            display: none;
+        }
+
+        .loading.active {
+            display: block;
+        }
+
+        .spinner {
+            border: 3px solid rgba(75, 85, 99, 0.3);
+            border-top: 3px solid #6ee7b7;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .player-info {
+            margin-top: 40px;
+            padding-top: 30px;
+            border-top: 2px solid rgba(75, 85, 99, 0.3);
+            display: none;
+        }
+
+        .player-info.active {
+            display: block;
+            animation: fadeIn 0.5s;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .player-card {
+            background: rgba(31, 41, 55, 0.4);
+            border: 2px solid rgba(110, 231, 183, 0.3);
+            border-radius: 16px;
+            padding: 25px;
+            margin-bottom: 20px;
+            transition: all 0.3s ease;
+        }
+
+        .player-card:hover {
+            border-color: rgba(110, 231, 183, 0.6);
+            box-shadow: 0 4px 20px rgba(110, 231, 183, 0.2);
+            transform: translateY(-2px);
+        }
+
+        .player-name {
+            font-size: 1.5em;
+            font-weight: 700;
+            color: #6ee7b7;
+            margin-bottom: 15px;
+        }
+
+        .player-details {
+            color: #d1d5db;
+            font-size: 0.95em;
+            line-height: 2;
+        }
+
+        .player-details div {
+            margin: 6px 0;
+        }
+
+        .player-details strong {
+            color: #f3f4f6;
+            font-weight: 600;
+            margin-right: 8px;
+        }
+
+        .right-column-title {
+            color: #6ee7b7;
+            font-weight: 700;
+            font-size: 1.4em;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            margin-bottom: 30px;
+            padding-bottom: 15px;
+            border-bottom: 2px solid rgba(75, 85, 99, 0.4);
+        }
+
+        .predictions-container {
+            display: none;
+        }
+
+        .predictions-container.active {
+            display: block;
+        }
+
+        .prediction-card {
+            background: rgba(31, 41, 55, 0.4);
+            border: 2px solid rgba(110, 231, 183, 0.4);
+            border-radius: 20px;
+            padding: 30px;
+            margin-bottom: 24px;
+            transition: all 0.3s ease;
+            backdrop-filter: blur(5px);
+        }
+
+        .prediction-card:hover {
+            border-color: rgba(110, 231, 183, 0.7);
+            box-shadow: 0 6px 25px rgba(110, 231, 183, 0.3);
+            transform: translateY(-3px);
+        }
+
+        .prediction-header {
+            font-size: 1.15em;
+            font-weight: 700;
+            color: #6ee7b7;
+            margin-bottom: 24px;
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
+            padding-bottom: 12px;
+            border-bottom: 2px solid rgba(75, 85, 99, 0.3);
+        }
+
+        .prediction-player {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 18px 0;
+            border-bottom: 1px solid rgba(75, 85, 99, 0.3);
+        }
+
+        .prediction-player:last-child {
+            border-bottom: none;
+            padding-bottom: 0;
+        }
+
+        .prediction-player-name {
+            font-weight: 600;
+            color: #f3f4f6;
+            font-size: 1.05em;
+        }
+
+        .prediction-percentage {
+            font-size: 2em;
+            font-weight: 800;
+            color: #6ee7b7;
+            letter-spacing: -1px;
+        }
+
+        .error {
+            background: rgba(255, 0, 0, 0.1);
+            border: 2px solid #ff4444;
+            color: #ff6666;
+            padding: 18px;
+            border-radius: 8px;
+            margin-top: 20px;
+            display: none;
+        }
+
+        .error.active {
+            display: block;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 80px 20px;
+            color: #9ca3af;
+        }
+
+        .empty-state p {
+            font-size: 1.1em;
+            margin-top: 15px;
+        }
+
+        @media (max-width: 1200px) {
+            .main-content {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        @media (max-width: 768px) {
+            body {
+                padding: 15px;
+            }
+
+            h1 {
+                font-size: 2.5em;
+            }
+
+            .left-column, .right-column {
+                padding: 25px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Tennis Match Predictor</h1>
+            <p class="subtitle">Enter two players to see predictions from our ML models</p>
+        </div>
+
+        <div class="main-content">
+            <div class="left-column">
+                <form id="predictionForm">
+                    <div class="form-group">
+                        <label for="player1">Player 1</label>
+                        <input type="text" id="player1" name="player1" placeholder="e.g., alcaraz" required>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="player2">Player 2</label>
+                        <input type="text" id="player2" name="player2" placeholder="e.g., sinner" required>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="surface">Surface</label>
+                        <select id="surface" name="surface">
+                            <option value="Hard" selected>Hard</option>
+                            <option value="Clay">Clay</option>
+                            <option value="Grass">Grass</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="tourney_level">Tournament Level</label>
+                        <select id="tourney_level" name="tourney_level">
+                            <option value="G" selected>Grand Slam</option>
+                            <option value="M">Masters</option>
+                            <option value="A">ATP Tour</option>
+                            <option value="F">Futures</option>
+                            <option value="C">Challenger</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="round_code">Round</label>
+                        <select id="round_code" name="round_code">
+                            <option value="1">Round of 128</option>
+                            <option value="2">Round of 64</option>
+                            <option value="3">Round of 32</option>
+                            <option value="4">Round of 16</option>
+                            <option value="5">Quarterfinal</option>
+                            <option value="6">Semifinal</option>
+                            <option value="7" selected>Final</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <div class="checkbox-group">
+                            <input type="checkbox" id="best_of_5" name="best_of_5">
+                            <label for="best_of_5">Best of 5 sets</label>
+                        </div>
+                    </div>
+
+                    <button type="submit" id="submitBtn">Get Predictions</button>
+                    <button type="button" id="valueBetsBtn" style="margin-top: 10px; background: rgba(110, 231, 183, 0.2); border: 2px solid rgba(110, 231, 183, 0.5);">💰 Find Value Bets</button>
+                </form>
+
+                <div class="loading" id="loading">
+                    <div class="spinner"></div>
+                    <p>Computing predictions...</p>
+                </div>
+
+                <div class="error" id="error"></div>
+
+                <div class="player-info" id="playerInfo"></div>
+            </div>
+
+            <div class="right-column">
+                <div class="right-column-title">Predictions</div>
+                <div class="empty-state" id="emptyState">
+                    <p>Submit a prediction to see results</p>
+                </div>
+                <div class="predictions-container" id="predictions"></div>
+                <div class="value-bets-container" id="valueBets" style="display: none; margin-top: 30px;"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const form = document.getElementById('predictionForm');
+        const loading = document.getElementById('loading');
+        const playerInfo = document.getElementById('playerInfo');
+        const predictionsDiv = document.getElementById('predictions');
+        const valueBetsDiv = document.getElementById('valueBets');
+        const emptyState = document.getElementById('emptyState');
+        const error = document.getElementById('error');
+        const submitBtn = document.getElementById('submitBtn');
+        const valueBetsBtn = document.getElementById('valueBetsBtn');
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            error.classList.remove('active');
+            playerInfo.classList.remove('active');
+            playerInfo.innerHTML = '';
+            predictionsDiv.classList.remove('active');
+            predictionsDiv.innerHTML = '';
+            emptyState.style.display = 'block';
+            loading.classList.add('active');
+            submitBtn.disabled = true;
+
+            const formData = {
+                player1: document.getElementById('player1').value,
+                player2: document.getElementById('player2').value,
+                surface: document.getElementById('surface').value,
+                best_of_5: document.getElementById('best_of_5').checked,
+                round_code: document.getElementById('round_code').value,
+                tourney_level: document.getElementById('tourney_level').value
+            };
+
+            try {
+                const response = await fetch('/api/predict', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(formData)
+                });
+
+                const data = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(data.error || 'Prediction failed');
+                }
+
+                displayResults(data);
+                loading.classList.remove('active');
+                playerInfo.classList.add('active');
+                predictionsDiv.classList.add('active');
+                emptyState.style.display = 'none';
+            } catch (err) {
+                error.textContent = err.message;
+                error.classList.add('active');
+                loading.classList.remove('active');
+                emptyState.style.display = 'block';
+            } finally {
+                submitBtn.disabled = false;
+            }
+        });
+
+        valueBetsBtn.addEventListener('click', async () => {
+            const player1 = document.getElementById('player1').value;
+            const player2 = document.getElementById('player2').value;
+            
+            if (!player1 || !player2) {
+                error.textContent = 'Please enter both player names first';
+                error.classList.add('active');
+                return;
+            }
+            
+            valueBetsBtn.disabled = true;
+            valueBetsBtn.textContent = 'Loading odds...';
+            error.classList.remove('active');
+            valueBetsDiv.style.display = 'none';
+            
+            const formData = {
+                player1: player1,
+                player2: player2,
+                surface: document.getElementById('surface').value,
+                best_of_5: document.getElementById('best_of_5').checked,
+                round_code: document.getElementById('round_code').value,
+                tourney_level: document.getElementById('tourney_level').value
+            };
+            
+            try {
+                const response = await fetch('/api/value-bets', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(formData)
+                });
+                
+                const data = await response.json();
+                
+                if (!response.ok) {
+                    throw new Error(data.error || 'Could not calculate value bets');
+                }
+                
+                displayValueBets(data);
+                valueBetsDiv.style.display = 'block';
+            } catch (err) {
+                error.textContent = err.message;
+                error.classList.add('active');
+            } finally {
+                valueBetsBtn.disabled = false;
+                valueBetsBtn.textContent = '💰 Find Value Bets';
+            }
+        });
+
+        function displayValueBets(data) {
+            let html = '<div class="right-column-title" style="margin-top: 0;">Value Betting Analysis</div>';
+            
+            // Display warning if using mock odds
+            if (data.value_analysis.warning) {
+                html += `
+                    <div style="background: rgba(239, 68, 68, 0.15); border-left: 3px solid #ef4444; padding: 12px; margin-bottom: 15px; border-radius: 6px; color: #fca5a5;">
+                        <div style="font-weight: 600; margin-bottom: 5px; color: #ef4444;">⚠️ WARNING</div>
+                        <div style="font-size: 0.9em; line-height: 1.5;">${data.value_analysis.warning}</div>
+                    </div>
+                `;
+            }
+            
+            // Calculate implied probabilities
+            const prob1 = (1 / parseFloat(data.match.player1.odds) * 100).toFixed(1);
+            const prob2 = (1 / parseFloat(data.match.player2.odds) * 100).toFixed(1);
+            
+            // Show odds
+            html += `
+                <div class="prediction-card" style="margin-bottom: 20px;">
+                    <div class="prediction-header" style="display: flex; align-items: center; gap: 8px;">
+                        Current Odds
+                        <span class="odds-info-icon" title="Decimal odds: Bet $1 to get back the odds amount. Lower odds = more likely to win. Implied probability = 1/odds.">ℹ️</span>
+                    </div>
+                    <div class="prediction-player">
+                        <span class="prediction-player-name">${data.match.player1.name}</span>
+                        <div style="display: flex; flex-direction: column; align-items: flex-end;">
+                            <span style="font-size: 1.3em; color: #6ee7b7;">${data.match.player1.odds}</span>
+                            <span style="font-size: 0.75em; color: #9ca3af;">${prob1}% implied</span>
+                        </div>
+                    </div>
+                    <div class="prediction-player">
+                        <span class="prediction-player-name">${data.match.player2.name}</span>
+                        <div style="display: flex; flex-direction: column; align-items: flex-end;">
+                            <span style="font-size: 1.3em; color: #6ee7b7;">${data.match.player2.odds}</span>
+                            <span style="font-size: 0.75em; color: #9ca3af;">${prob2}% implied</span>
+                        </div>
+                    </div>
+                    <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(75, 85, 99, 0.3); font-size: 0.85em; color: #9ca3af;">
+                        💡 <strong>What this means:</strong> Bet $100 on ${data.match.player1.name} → Win $${Math.round(parseFloat(data.match.player1.odds) * 100 - 100)} profit if correct. Bet $100 on ${data.match.player2.name} → Win $${Math.round(parseFloat(data.match.player2.odds) * 100 - 100)} profit if correct.
+                    </div>
+                </div>
+            `;
+            
+            // Show recommendations
+            if (data.value_analysis.recommendations && data.value_analysis.recommendations.length > 0) {
+                html += '<div class="prediction-card" style="border-color: rgba(110, 231, 183, 0.8);">';
+                html += '<div class="prediction-header">💎 Value Bet Recommendation</div>';
+                
+                // Only show Random Forest recommendation, simplified
+                const rfRec = data.value_analysis.recommendations.find(r => r.model === "Random Forest");
+                
+                if (rfRec) {
+                    html += `
+                        <div style="padding: 20px 0;">
+                            <div style="text-align: center; margin-bottom: 20px;">
+                                <div style="font-size: 1.5em; font-weight: 700; color: #6ee7b7; margin-bottom: 8px;">
+                                    Bet on ${rfRec.bet_on}
+                                </div>
+                                <div style="font-size: 1.1em; color: #9ca3af;">Random Forest Model</div>
+                            </div>
+                            
+                            <div style="display: flex; justify-content: space-around; padding: 20px; background: rgba(110, 231, 183, 0.1); border-radius: 8px;">
+                                <div style="text-align: center;">
+                                    <div style="font-size: 0.9em; color: #9ca3af; margin-bottom: 5px;">Odds</div>
+                                    <div style="font-size: 1.8em; font-weight: 700; color: #6ee7b7;">${rfRec.odds}</div>
+                                </div>
+                                <div style="width: 1px; background: rgba(75, 85, 99, 0.3);"></div>
+                                <div style="text-align: center;">
+                                    <div style="font-size: 0.9em; color: #9ca3af; margin-bottom: 5px;">Kelly</div>
+                                    <div style="font-size: 1.8em; font-weight: 700; color: #6ee7b7;">${rfRec.kelly_percent}%</div>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                }
+                html += '</div>';
+            } else {
+                html += '<div class="prediction-card"><p style="color: #9ca3af; text-align: center;">No Random Forest value bet found at current odds</p></div>';
+            }
+            
+            valueBetsDiv.innerHTML = html;
+        }
+
+        function displayResults(data) {
+            playerInfo.innerHTML = `
+                <div class="player-card">
+                    <div class="player-name">${data.player1.name}</div>
+                    <div class="player-details">
+                        <div><strong>Elo Rating:</strong> ${data.player1.elo}</div>
+                        ${data.player1.age ? `<div><strong>Age:</strong> ${data.player1.age}</div>` : ''}
+                        ${data.player1.height ? `<div><strong>Height:</strong> ${data.player1.height} cm</div>` : ''}
+                    </div>
+                </div>
+                <div class="player-card">
+                    <div class="player-name">${data.player2.name}</div>
+                    <div class="player-details">
+                        <div><strong>Elo Rating:</strong> ${data.player2.elo}</div>
+                        ${data.player2.age ? `<div><strong>Age:</strong> ${data.player2.age}</div>` : ''}
+                        ${data.player2.height ? `<div><strong>Height:</strong> ${data.player2.height} cm</div>` : ''}
+                    </div>
+                </div>
+            `;
+
+            const modelOrder = ['Decision Tree', 'Random Forest', 'XGBoost'];
+            let predictionsHTML = '';
+            
+            for (const modelName of modelOrder) {
+                const pred = data.predictions[modelName];
+                if (pred) {
+                    predictionsHTML += `
+                        <div class="prediction-card">
+                            <div class="prediction-header">${modelName}</div>
+                            <div class="prediction-player">
+                                <span class="prediction-player-name">${data.player1.name}</span>
+                                <span class="prediction-percentage">${pred.player1_win_prob}%</span>
+                            </div>
+                            <div class="prediction-player">
+                                <span class="prediction-player-name">${data.player2.name}</span>
+                                <span class="prediction-percentage">${pred.player2_win_prob}%</span>
+                            </div>
+                        </div>
+                    `;
+                }
+            }
+            
+            predictionsDiv.innerHTML = predictionsHTML;
+        }
+    </script>
+</body>
+</html>
