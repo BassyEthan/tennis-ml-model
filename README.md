@@ -1,8 +1,8 @@
 # Tennis Match Prediction & Trading System
 
-A production-ready machine learning system for predicting tennis match outcomes and identifying value betting opportunities.
+A production-ready machine learning system for predicting tennis match outcomes and identifying value betting opportunities using Kalshi prediction markets.
 
-## 🏗️ Project Structure
+## Project Structure
 
 ```
 tennis-ml-model/
@@ -11,8 +11,7 @@ tennis-ml-model/
 │   └── wsgi.py             # WSGI entry point for production
 │
 ├── config/                 # Configuration management
-│   ├── __init__.py
-│   └── settings.py        # Centralized configuration
+│   └── settings.py         # Centralized configuration
 │
 ├── src/                    # Source code
 │   ├── core/              # Core business logic
@@ -23,6 +22,7 @@ tennis-ml-model/
 │   │   ├── player_stats.py
 │   │   └── predictor.py
 │   ├── trading/           # Trading/betting logic
+│   │   ├── kalshi_client.py
 │   │   └── odds_fetcher.py
 │   ├── evaluation/        # Model evaluation
 │   └── simulation/        # Tournament simulation
@@ -30,8 +30,9 @@ tennis-ml-model/
 ├── scripts/               # Utility scripts
 │   ├── data/              # Data processing scripts
 │   ├── training/          # Model training scripts
-│   ├── evaluation/         # Evaluation scripts
-│   └── simulation/        # Simulation scripts
+│   ├── evaluation/        # Evaluation scripts
+│   ├── simulation/        # Simulation scripts
+│   └── trading/           # Trading scripts
 │
 ├── data/                  # Data directories
 │   ├── raw/               # Raw ATP match data
@@ -42,15 +43,11 @@ tennis-ml-model/
 ├── outputs/               # Generated outputs (predictions, brackets)
 ├── reports/               # Analysis reports and figures
 ├── templates/             # HTML templates
-├── docs/                  # Documentation
-│
-├── requirements.txt       # Python dependencies
-├── runtime.txt            # Python version
-├── Procfile               # Deployment configuration
-└── render.yaml            # Render.com configuration
+├── keys/                  # Private keys (git-ignored)
+└── docs/                  # Documentation
 ```
 
-## 🚀 Quick Start
+## Quick Start
 
 ### 1. Install Dependencies
 
@@ -104,13 +101,13 @@ python app/app.py
 
 The application will be available at `http://localhost:5001`
 
-## 📊 Features
+## Features
 
 ### Match Prediction
 - Predict match outcomes using three ML models:
-  - **Random Forest** (primary model)
-  - **Decision Tree**
-  - **XGBoost**
+  - Random Forest (primary model)
+  - Decision Tree
+  - XGBoost
 - Customizable match parameters:
   - Surface (Hard, Clay, Grass)
   - Tournament level (Grand Slam, Masters, ATP Tour, etc.)
@@ -123,13 +120,19 @@ The application will be available at `http://localhost:5001`
 - Kelly Criterion for optimal bet sizing
 - Support for multiple bookmakers
 
+### Kalshi Trading Integration
+- Direct integration with Kalshi prediction markets
+- Automated order placement based on model predictions
+- Portfolio management and position tracking
+- See `docs/KALSHI_SETUP.md` for setup instructions
+
 ### Player Statistics
 - Elo ratings (overall and surface-specific)
 - Recent form (last 50 matches)
 - Head-to-head records
 - Player demographics (age, height)
 
-## 🔧 Configuration
+## Configuration
 
 Configuration is managed in `config/settings.py`. Key settings:
 
@@ -139,12 +142,12 @@ Configuration is managed in `config/settings.py`. Key settings:
 
 ### Environment Variables
 
-Create a `.env` file in the project root (see `.env.example` for template):
+Create a `.env` file in the project root:
 
 ```bash
 # Kalshi Trading API
 KALSHI_ACCESS_KEY=your_kalshi_access_key
-KALSHI_PRIVATE_KEY_PATH=keys/kalshi_private_key.pem
+KALSHI_PRIVATE_KEY_PATH=keys/kalshi_private_key.txt
 KALSHI_BASE_URL=https://demo-api.kalshi.co
 
 # Other APIs
@@ -164,11 +167,11 @@ export PORT=5001
 
 ### Kalshi Setup
 
-1. Place your Kalshi private key in `keys/kalshi_private_key.pem`
+1. Place your Kalshi private key in `keys/kalshi_private_key.txt`
 2. Set `KALSHI_ACCESS_KEY` in `.env` or environment
 3. See `docs/KALSHI_SETUP.md` for detailed instructions
 
-## 📝 Scripts
+## Scripts
 
 ### Data Processing
 ```bash
@@ -192,7 +195,12 @@ python -m scripts.evaluation.evaluate
 python -m scripts.simulation.simulate_tournament
 ```
 
-## 🌐 API Endpoints
+### Kalshi Trading
+```bash
+python -m scripts.trading.kalshi_example
+```
+
+## API Endpoints
 
 ### Health Check
 ```
@@ -228,7 +236,7 @@ POST /api/value-bets
 }
 ```
 
-## 🚢 Deployment
+## Deployment
 
 ### Render.com
 
@@ -238,6 +246,8 @@ The project is configured for Render.com deployment:
 2. **wsgi.py** provides the WSGI entry point
 3. Set environment variables in Render dashboard:
    - `ODDS_API_KEY` (optional, for real odds)
+   - `KALSHI_ACCESS_KEY` (for Kalshi trading)
+   - `KALSHI_PRIVATE_KEY_PATH` (path to private key)
    - `FLASK_ENV=production`
    - `PORT` (auto-set by Render)
 
@@ -248,15 +258,17 @@ For other platforms (Heroku, AWS, etc.), ensure:
 - Environment variables are set correctly
 - Python version matches `runtime.txt`
 
-## 📚 Documentation
+See `docs/DEPLOYMENT_GUIDE.md` for detailed instructions.
+
+## Documentation
 
 See `docs/` directory for detailed documentation:
-- `BETTING_GUIDE.md` - Value betting guide
+- `PROJECT_STRUCTURE.md` - Codebase organization
+- `BETTING_GUIDE.md` - Value betting concepts
+- `KALSHI_SETUP.md` - Kalshi integration setup
 - `DEPLOYMENT_GUIDE.md` - Deployment instructions
-- `WEBAPP_README.md` - Web application usage
-- And more...
 
-## 🧪 Development
+## Development
 
 ### Project Organization
 
@@ -272,12 +284,18 @@ See `docs/` directory for detailed documentation:
 3. Utility scripts → `scripts/`
 4. Configuration → `config/settings.py`
 
-## 📄 License
+## Security
+
+- `.env` file is git-ignored (contains API keys)
+- `keys/` directory is git-ignored (contains private keys)
+- Never commit credentials to the repository
+- Use environment variables in production
+
+## License
 
 This project is for educational and research purposes.
 
-## 🙏 Acknowledgments
+## Acknowledgments
 
 - ATP match data from [Jeff Sackmann's GitHub](https://github.com/JeffSackmann/tennis_atp)
 - ML models trained on historical ATP match data
-
