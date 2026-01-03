@@ -41,6 +41,15 @@ Thumbs.db
 .env
 .env.local
 
+# Private keys and credentials
+keys/*.pem
+keys/*.key
+keys/*.txt
+keys/*.p12
+keys/*.pfx
+!keys/.gitkeep
+!keys/README.md
+
 # Model outputs (optional - you might want to keep models/)
 # outputs/
 # reports/figures/

@@ -1,0 +1,4 @@
+# This directory stores private keys
+# Add your Kalshi private key file here (e.g., kalshi_private_key.pem)
+# DO NOT commit private keys to git!
+

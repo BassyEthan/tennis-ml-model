@@ -1,2 +1,0 @@
-# Betting utilities package
-
