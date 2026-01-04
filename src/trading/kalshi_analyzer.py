@@ -27,7 +27,6 @@ from src.api.predictor import MatchPredictor
 
 
 def format_time_est(dt: datetime) -> str:
-    """Convert UTC datetime to EST and format for display."""
     if not dt:
         return ""
     if ZoneInfo:
