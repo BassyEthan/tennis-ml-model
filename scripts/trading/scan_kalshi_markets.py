@@ -90,29 +90,39 @@ def main():
         
         # Display tradable opportunities
         if tradable:
-            print()
-            print("=" * 70)
-            print(f"Found {len(tradable)} Value Opportunities")
-            print("=" * 70)
-            print()
+            print(f"\n{'=' * 70}")
+            print(f"💰 TRADABLE OPPORTUNITIES ({len(tradable)})")
+            print(f"{'=' * 70}")
             
             for i, opp in enumerate(tradable, 1):
                 volume_str = f"${opp.get('market_volume', 0):,.0f}" if opp.get('market_volume') else "Unknown"
-                print(f"Opportunity #{i} (Volume: {volume_str})")
-                print(f"  Market: {opp['title']}")
-                print(f"  Ticker: {opp['ticker']}")
-                print(f"  Players: {opp['matched_players'][0]} vs {opp['matched_players'][1]}")
-                print(f"  Model Probability: {opp['model_probability']:.1%}")
-                print(f"  Kalshi Probability: {opp['kalshi_probability']:.1%}")
-                print(f"  Value: {opp['value']:.1%}")
-                print(f"  Expected Value: {opp['expected_value']:.1%}")
-                print(f"  Recommendation: Buy {opp['trade_side'].upper()} on {opp['matched_players'][0]}")
-                print(f"  Kalshi Price: {opp['kalshi_odds']['yes_price']:.1f} cents")
-                print(f"  Market Volume: {volume_str}")
-                print(f"  Reason: {opp.get('reason', 'N/A')}")
-                print()
+                players = opp['matched_players']
+                players_str = f"{players[0]} vs {players[1]}"
+                
+                # Determine which player we're betting on
+                bet_on_player = opp.get('bet_on_player')
+                if not bet_on_player:
+                    # Fallback: use trade_side to determine
+                    if opp.get('trade_side') == 'yes':
+                        bet_on_player = players[0]  # Default to first player
+                    else:
+                        bet_on_player = players[1]
+                
+                print(f"\n   [{i}/{len(tradable)}] {opp['title']}")
+                print(f"      Match: {players_str}")
+                print(f"      Edge: {opp['value']:+.1%} | EV: {opp['expected_value']:+.1%} | Volume: {volume_str}")
+                print(f"      Model Probability: {opp['model_probability']:.1%} | Kalshi Probability: {opp['kalshi_probability']:.1%}")
+                kalshi_odds = opp.get('kalshi_odds', {})
+                yes_price = kalshi_odds.get('yes_price', 0)
+                no_price = kalshi_odds.get('no_price', 0)
+                if yes_price and no_price:
+                    print(f"      Kalshi Odds: YES @ {yes_price:.1f}¢ | NO @ {no_price:.1f}¢")
+                print(f"      🎯 BET ON: {bet_on_player} @ {yes_price:.1f}¢")
+                print(f"      Ticker: {opp['ticker']}")
         else:
-            print("\nNo tradable opportunities found.")
+            print(f"\n{'=' * 70}")
+            print("⚠️  NO TRADABLE OPPORTUNITIES FOUND")
+            print(f"{'=' * 70}")
         
         # Display all analyzed markets if requested
         if args.show_all and all_analyses:

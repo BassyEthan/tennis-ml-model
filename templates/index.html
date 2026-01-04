@@ -402,6 +402,251 @@
             opacity: 1;
             pointer-events: auto;
         }
+
+        .opportunity-card {
+            background: rgba(31, 41, 55, 0.4);
+            border: 2px solid rgba(110, 231, 183, 0.4);
+            border-radius: 20px;
+            padding: 30px;
+            margin-bottom: 24px;
+            transition: all 0.3s ease;
+            backdrop-filter: blur(5px);
+        }
+
+        .opportunity-card:hover {
+            border-color: rgba(110, 231, 183, 0.7);
+            box-shadow: 0 6px 25px rgba(110, 231, 183, 0.3);
+            transform: translateY(-3px);
+        }
+
+        .opportunity-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: start;
+            margin-bottom: 24px;
+            padding-bottom: 16px;
+            border-bottom: 2px solid rgba(75, 85, 99, 0.3);
+        }
+
+        .opportunity-title {
+            font-size: 1.15em;
+            font-weight: 700;
+            color: #6ee7b7;
+            flex: 1;
+            margin-right: 16px;
+            line-height: 1.4;
+        }
+
+        .opportunity-volume {
+            font-size: 0.9em;
+            color: #6ee7b7;
+            background: rgba(110, 231, 183, 0.15);
+            border: 1px solid rgba(110, 231, 183, 0.3);
+            padding: 8px 16px;
+            border-radius: 12px;
+            font-weight: 600;
+            white-space: nowrap;
+        }
+
+        .opportunity-players {
+            display: grid;
+            grid-template-columns: 1fr auto 1fr;
+            gap: 20px;
+            align-items: center;
+            margin-bottom: 24px;
+            padding: 20px;
+            background: rgba(26, 29, 36, 0.6);
+            border-radius: 16px;
+            border: 1px solid rgba(75, 85, 99, 0.3);
+        }
+
+        .opportunity-player {
+            text-align: center;
+        }
+
+        .opportunity-player-name {
+            font-size: 1.1em;
+            font-weight: 700;
+            color: #e8e9ea;
+            margin-bottom: 12px;
+        }
+
+        .opportunity-prob-container {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .opportunity-prob-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 12px;
+            background: rgba(31, 41, 55, 0.5);
+            border-radius: 8px;
+        }
+
+        .opportunity-prob-label {
+            font-size: 0.85em;
+            color: #9ca3af;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-weight: 600;
+        }
+
+        .opportunity-prob {
+            font-size: 1.1em;
+            font-weight: 700;
+        }
+
+        .opportunity-prob.model {
+            color: #6ee7b7;
+        }
+
+        .opportunity-prob.kalshi {
+            color: #fbbf24;
+        }
+
+        .opportunity-vs {
+            font-size: 1.2em;
+            font-weight: 700;
+            color: #6b7280;
+            padding: 0 12px;
+        }
+
+        .opportunity-metrics {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+            margin-bottom: 20px;
+        }
+
+        .opportunity-metric {
+            background: rgba(26, 29, 36, 0.6);
+            border: 1px solid rgba(75, 85, 99, 0.3);
+            padding: 16px;
+            border-radius: 12px;
+            transition: all 0.3s ease;
+        }
+
+        .opportunity-metric:hover {
+            border-color: rgba(110, 231, 183, 0.4);
+            background: rgba(26, 29, 36, 0.8);
+        }
+
+        .opportunity-metric-label {
+            font-size: 0.75em;
+            color: #9ca3af;
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            font-weight: 600;
+        }
+
+        .opportunity-metric-value {
+            font-size: 1.4em;
+            font-weight: 700;
+        }
+
+        .opportunity-metric-value.positive {
+            color: #6ee7b7;
+        }
+
+        .opportunity-metric-value.negative {
+            color: #ef4444;
+        }
+
+        .opportunity-recommendation {
+            background: rgba(110, 231, 183, 0.15);
+            border: 2px solid rgba(110, 231, 183, 0.4);
+            border-radius: 12px;
+            padding: 16px;
+            margin-top: 16px;
+        }
+
+        .opportunity-recommendation-text {
+            font-size: 0.95em;
+            color: #6ee7b7;
+            font-weight: 600;
+            line-height: 1.6;
+        }
+
+        .opportunity-recommendation-text strong {
+            color: #6ee7b7;
+            font-weight: 700;
+        }
+
+        .opportunity-recommendation-details {
+            font-size: 0.85em;
+            color: #9ca3af;
+            margin-top: 8px;
+            padding-top: 8px;
+            border-top: 1px solid rgba(110, 231, 183, 0.2);
+        }
+
+        .opportunity-ticker {
+            font-size: 0.75em;
+            color: #6b7280;
+            margin-top: 12px;
+            font-family: 'Courier New', monospace;
+            text-align: center;
+            padding: 6px 12px;
+            background: rgba(26, 29, 36, 0.5);
+            border-radius: 6px;
+            display: inline-block;
+        }
+        
+        .start-trading-button:hover {
+            background: linear-gradient(135deg, #86efac 0%, #6ee7b7 100%);
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(110, 231, 183, 0.4);
+        }
+        
+        .start-trading-button:active {
+            transform: translateY(0);
+        }
+        
+        .stop-trading-button:hover {
+            background: rgba(239, 68, 68, 0.3);
+            border-color: rgba(239, 68, 68, 0.6);
+            transform: translateY(-2px);
+        }
+        
+        .stop-trading-button:active {
+            transform: translateY(0);
+        }
+        
+        .trading-log-container {
+            background: rgba(15, 23, 42, 0.9);
+            border: 1px solid rgba(75, 85, 99, 0.4);
+            border-radius: 12px;
+            padding: 20px;
+            min-height: 300px;
+            max-height: 600px;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 0.85em;
+            color: #e8e9ea;
+            line-height: 1.6;
+        }
+        
+        .trading-log-container::-webkit-scrollbar {
+            width: 8px;
+        }
+        
+        .trading-log-container::-webkit-scrollbar-track {
+            background: rgba(26, 29, 36, 0.5);
+            border-radius: 4px;
+        }
+        
+        .trading-log-container::-webkit-scrollbar-thumb {
+            background: rgba(110, 231, 183, 0.3);
+            border-radius: 4px;
+        }
+        
+        .trading-log-container::-webkit-scrollbar-thumb:hover {
+            background: rgba(110, 231, 183, 0.5);
+        }
     </style>
 </head>
 <body>
@@ -465,7 +710,6 @@
                     </div>
 
                     <button type="submit" id="submitBtn">Get Predictions</button>
-                    <button type="button" id="valueBetsBtn" style="margin-top: 10px; background: rgba(110, 231, 183, 0.2); border: 2px solid rgba(110, 231, 183, 0.5);">💰 Find Value Bets</button>
                 </form>
 
                 <div class="loading" id="loading">
@@ -484,7 +728,46 @@
                     <p>Submit a prediction to see results</p>
                 </div>
                 <div class="predictions-container" id="predictions"></div>
-                <div class="value-bets-container" id="valueBets" style="display: none; margin-top: 30px;"></div>
+                
+                <!-- Kalshi Opportunities Section -->
+                <div class="opportunities-section" id="opportunitiesSection" style="margin-top: 40px; padding-top: 30px; border-top: 1px solid rgba(75, 85, 99, 0.3);">
+                    <div class="right-column-title" style="margin-bottom: 20px;">Top Trading Opportunities</div>
+                    <div class="opportunities-loading" id="opportunitiesLoading" style="text-align: center; color: #9ca3af; padding: 20px;">
+                        Loading opportunities...
+                    </div>
+                    <div class="opportunities-container" id="opportunities" style="display: none;"></div>
+                    <div class="opportunities-error" id="opportunitiesError" style="display: none; color: #ef4444; text-align: center; padding: 20px;"></div>
+                </div>
+                
+                <!-- Live Trading Section -->
+                <div class="live-trading-section" id="liveTradingSection" style="margin-top: 40px; padding-top: 30px; border-top: 2px solid rgba(75, 85, 99, 0.4);">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                        <div class="right-column-title" style="margin-bottom: 0;">Live Automated Trading</div>
+                        <div style="display: flex; gap: 12px; align-items: center;">
+                            <button id="startTradingBtn" class="start-trading-button" style="padding: 12px 24px; background: linear-gradient(135deg, #6ee7b7 0%, #10b981 100%); border: none; border-radius: 12px; color: #0f172a; font-weight: 700; cursor: pointer; transition: all 0.3s ease; font-size: 0.95em; text-transform: uppercase; letter-spacing: 0.5px;">
+                                ▶ Start Trading (Dry Run)
+                            </button>
+                            <button id="stopTradingBtn" class="stop-trading-button" style="padding: 12px 24px; background: rgba(239, 68, 68, 0.2); border: 2px solid rgba(239, 68, 68, 0.4); border-radius: 12px; color: #ef4444; font-weight: 700; cursor: pointer; transition: all 0.3s ease; font-size: 0.95em; display: none;">
+                                ⏹ Stop Trading
+                            </button>
+                        </div>
+                    </div>
+                    <!-- View Toggle Buttons -->
+                    <div style="display: flex; gap: 8px; margin-bottom: 15px;">
+                        <button id="tradingPhaseViewBtn" class="view-toggle-button active" style="padding: 8px 16px; background: rgba(110, 231, 183, 0.2); border: 2px solid rgba(110, 231, 183, 0.4); border-radius: 8px; color: #6ee7b7; font-weight: 600; cursor: pointer; transition: all 0.3s ease; font-size: 0.85em;">
+                            📊 Trading Phase
+                        </button>
+                        <button id="logsViewBtn" class="view-toggle-button" style="padding: 8px 16px; background: rgba(75, 85, 99, 0.2); border: 2px solid rgba(75, 85, 99, 0.4); border-radius: 8px; color: #9ca3af; font-weight: 600; cursor: pointer; transition: all 0.3s ease; font-size: 0.85em;">
+                            📋 Logs
+                        </button>
+                    </div>
+                    <div class="trading-log-container" id="tradingLogContainer" style="background: rgba(15, 23, 42, 0.8); border: 1px solid rgba(75, 85, 99, 0.4); border-radius: 12px; padding: 20px; min-height: 300px; max-height: 600px; overflow-y: auto; font-family: 'Courier New', monospace; font-size: 0.85em; color: #e8e9ea; line-height: 1.6;">
+                        <div id="tradingLog" style="white-space: pre-wrap; word-wrap: break-word;">
+                            <div style="color: #9ca3af; font-style: italic;">Ready to start automated trading...</div>
+                            <div style="color: #9ca3af; font-size: 0.9em; margin-top: 8px;">Click "Start Trading (Dry Run)" to begin scanning markets and executing trades.</div>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
@@ -494,11 +777,9 @@
         const loading = document.getElementById('loading');
         const playerInfo = document.getElementById('playerInfo');
         const predictionsDiv = document.getElementById('predictions');
-        const valueBetsDiv = document.getElementById('valueBets');
         const emptyState = document.getElementById('emptyState');
         const error = document.getElementById('error');
         const submitBtn = document.getElementById('submitBtn');
-        const valueBetsBtn = document.getElementById('valueBetsBtn');
 
         function autoSetBestOf5() {
             const level = document.getElementById('tourney_level').value;
@@ -560,53 +841,6 @@
             }
         });
 
-        valueBetsBtn.addEventListener('click', async () => {
-            const player1 = document.getElementById('player1').value;
-            const player2 = document.getElementById('player2').value;
-            
-            if (!player1 || !player2) {
-                error.textContent = 'Please enter both player names first';
-                error.classList.add('active');
-                return;
-            }
-            
-            valueBetsBtn.disabled = true;
-            valueBetsBtn.textContent = 'Loading odds...';
-            error.classList.remove('active');
-            valueBetsDiv.style.display = 'none';
-            
-            const formData = {
-                player1: player1,
-                player2: player2,
-                surface: document.getElementById('surface').value,
-                best_of_5: document.getElementById('best_of_5').checked,
-                round_code: document.getElementById('round_code').value,
-                tourney_level: document.getElementById('tourney_level').value
-            };
-            
-            try {
-                const response = await fetch('/api/value-bets', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(formData)
-                });
-                
-                const data = await response.json();
-                
-                if (!response.ok) {
-                    throw new Error(data.error || 'Could not calculate value bets');
-                }
-                
-                displayValueBets(data);
-                valueBetsDiv.style.display = 'block';
-            } catch (err) {
-                error.textContent = err.message;
-                error.classList.add('active');
-            } finally {
-                valueBetsBtn.disabled = false;
-                valueBetsBtn.textContent = '💰 Find Value Bets';
-            }
-        });
 
         let latestPredictions = null;
 
@@ -663,113 +897,475 @@
             latestPredictions = data.predictions;
         }
 
-        function displayValueBets(data) {
-            let html = '<div class="right-column-title" style="margin-top: 0;">Value Betting Analysis</div>';
+
+        // Load opportunities on page load
+        async function loadOpportunities() {
+            const opportunitiesDiv = document.getElementById('opportunities');
+            const opportunitiesLoading = document.getElementById('opportunitiesLoading');
+            const opportunitiesError = document.getElementById('opportunitiesError');
+            const opportunitiesSection = document.getElementById('opportunitiesSection');
             
-            // (Removed warning banner per feedback)
-            
-            // Calculate implied probabilities
-            const prob1 = (1 / parseFloat(data.match.player1.odds) * 100).toFixed(1);
-            const prob2 = (1 / parseFloat(data.match.player2.odds) * 100).toFixed(1);
-            
-            // Show odds
+            try {
+                opportunitiesLoading.style.display = 'block';
+                opportunitiesDiv.style.display = 'none';
+                opportunitiesError.style.display = 'none';
+                
+                const response = await fetch('/api/opportunities?limit=5');
+                const data = await response.json();
+                
+                if (!response.ok) {
+                    throw new Error(data.error || 'Failed to load opportunities');
+                }
+                
+                opportunitiesLoading.style.display = 'none';
+                
+                if (data.opportunities && data.opportunities.length > 0) {
+                    let html = '';
+                    data.opportunities.forEach((opp, index) => {
+                        const volumeStr = opp.market_volume ? `$${opp.market_volume.toLocaleString()}` : 'Unknown';
+                        const valueClass = opp.value >= 0 ? 'positive' : 'negative';
+                        const evClass = opp.expected_value >= 0 ? 'positive' : 'negative';
+                        const p1ModelProb = opp.model_probability_p1.toFixed(1);
+                        const p1KalshiProb = opp.kalshi_probability.toFixed(1);
+                        const p2ModelProb = opp.model_probability_p2.toFixed(1);
+                        const p2KalshiProb = (100 - opp.kalshi_probability).toFixed(1);
+                        const betOnPlayer = opp.bet_on_player || opp.players.player1;
+                        const kalshiOdds = opp.kalshi_odds || {};
+                        const yesPrice = kalshiOdds.yes_price || opp.kalshi_price || 0;
+                        const noPrice = kalshiOdds.no_price || (100 - yesPrice);
+                        
             html += `
-                <div class="prediction-card" style="margin-bottom: 20px;">
-                    <div class="prediction-header" style="display: flex; align-items: center; gap: 8px;">
-                        Current Odds
-                        <span class="info-icon">ℹ️
-                            <span class="info-tooltip">Decimal odds: Bet $1 to get back the odds amount.\nLower odds = more likely to win.\nImplied probability = 1/odds.</span>
-                        </span>
+                            <div class="opportunity-card">
+                                <div class="opportunity-header">
+                                    <div class="opportunity-title">${opp.title}</div>
+                                    <div class="opportunity-volume">${volumeStr}</div>
                     </div>
-                    <div class="prediction-player">
-                        <span class="prediction-player-name">${data.match.player1.name}</span>
-                        <div style="display: flex; flex-direction: column; align-items: flex-end;">
-                            <span style="font-size: 1.3em; color: #6ee7b7;">${data.match.player1.odds}</span>
-                            <span style="font-size: 0.75em; color: #9ca3af;">${prob1}% implied</span>
+                                
+                                <div class="opportunity-players">
+                                    <div class="opportunity-player">
+                                        <div class="opportunity-player-name">${opp.players.player1}</div>
+                                        <div class="opportunity-prob-container">
+                                            <div class="opportunity-prob-row">
+                                                <span class="opportunity-prob-label">Model</span>
+                                                <span class="opportunity-prob model">${p1ModelProb}%</span>
+                        </div>
+                                            <div class="opportunity-prob-row">
+                                                <span class="opportunity-prob-label">Kalshi</span>
+                                                <span class="opportunity-prob kalshi">${p1KalshiProb}%</span>
+                    </div>
                         </div>
                     </div>
-                    <div class="prediction-player">
-                        <span class="prediction-player-name">${data.match.player2.name}</span>
-                        <div style="display: flex; flex-direction: column; align-items: flex-end;">
-                            <span style="font-size: 1.3em; color: #6ee7b7;">${data.match.player2.odds}</span>
-                            <span style="font-size: 0.75em; color: #9ca3af;">${prob2}% implied</span>
-                        </div>
+                                    <div class="opportunity-vs">VS</div>
+                                    <div class="opportunity-player">
+                                        <div class="opportunity-player-name">${opp.players.player2}</div>
+                                        <div class="opportunity-prob-container">
+                                            <div class="opportunity-prob-row">
+                                                <span class="opportunity-prob-label">Model</span>
+                                                <span class="opportunity-prob model">${p2ModelProb}%</span>
                     </div>
-                    <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(75, 85, 99, 0.3); font-size: 0.85em; color: #9ca3af;">
-                        💡 <strong>What this means:</strong> Bet $100 on ${data.match.player1.name} → Win $${Math.round(parseFloat(data.match.player1.odds) * 100 - 100)} profit if correct. Bet $100 on ${data.match.player2.name} → Win $${Math.round(parseFloat(data.match.player2.odds) * 100 - 100)} profit if correct.
-                    </div>
+                                            <div class="opportunity-prob-row">
+                                                <span class="opportunity-prob-label">Kalshi</span>
+                                                <span class="opportunity-prob kalshi">${p2KalshiProb}%</span>
                 </div>
-            `;
-            
-            // Show recommendations
-            if (data.value_analysis.recommendations && data.value_analysis.recommendations.length > 0) {
-                html += '<div class="prediction-card" style="border-color: rgba(110, 231, 183, 0.8);">';
-                html += '<div class="prediction-header">💎 Value Bet Recommendation</div>';
-                
-                // Only show Random Forest recommendation, simplified
-                const rfRec = data.value_analysis.recommendations.find(r => r.model === "Random Forest");
-                
-                if (rfRec) {
-                    html += `                        <div style="padding: 20px 0;">
-                            <div style="text-align: center; margin-bottom: 20px;">
-                                <div style="font-size: 1.5em; font-weight: 700; color: #6ee7b7; margin-bottom: 8px;">
-                                    Bet on ${rfRec.bet_on}
                                 </div>
-                                <div style="font-size: 1.1em; color: #9ca3af;">Random Forest Model</div>
+                                    </div>
                             </div>
                             
-                            <div style="display: flex; justify-content: space-around; padding: 20px; background: rgba(110, 231, 183, 0.1); border-radius: 8px;">
-                                <div style="text-align: center;">
-                                    <div style="font-size: 0.9em; color: #9ca3af; margin-bottom: 5px;">
-                                        Odds
-                                        <span class="info-icon">ℹ️
-                                            <span class="info-tooltip">Decimal odds = potential payout per $1 bet (incl. stake).\nExample: Odds 1.50 — $10 bet returns $15 if correct.</span>
-                                        </span>
+                                <div class="opportunity-metrics">
+                                    <div class="opportunity-metric">
+                                        <div class="opportunity-metric-label">Value Edge</div>
+                                        <div class="opportunity-metric-value ${valueClass}">${opp.value >= 0 ? '+' : ''}${opp.value.toFixed(1)}%</div>
                                     </div>
-                                    <div style="font-size: 1.8em; font-weight: 700; color: #6ee7b7;">${rfRec.odds}</div>
+                                    <div class="opportunity-metric">
+                                        <div class="opportunity-metric-label">Expected Value</div>
+                                        <div class="opportunity-metric-value ${evClass}">${opp.expected_value >= 0 ? '+' : ''}${opp.expected_value.toFixed(1)}%</div>
                                 </div>
-                                <div style="width: 1px; background: rgba(75, 85, 99, 0.3);"></div>
-                                <div style="text-align: center;">
-                                    <div style="font-size: 0.9em; color: #9ca3af; margin-bottom: 5px;">
-                                        Kelly
-                                        <span class="info-icon">ℹ️
-                                            <span class="info-tooltip">Kelly % = optimal bankroll fraction for max growth.\nFormula: ([Chance x Odds] - 1) / (Odds - 1)</span>
-                                        </span>
                                     </div>
-                                    <div style="font-size: 1.8em; font-weight: 700; color: #6ee7b7;">${rfRec.kelly_percent}%</div>
+                                
+                                <div class="opportunity-odds" style="background: rgba(31, 41, 55, 0.5); border-radius: 12px; padding: 16px; margin: 16px 0;">
+                                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 12px;">
+                                        <div>
+                                            <div style="color: #9ca3af; font-size: 0.85em; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px;">Model Probability</div>
+                                            <div style="color: #6ee7b7; font-size: 1.3em; font-weight: 700;">${opp.model_probability ? opp.model_probability.toFixed(1) : (opp.model_probability_p1).toFixed(1)}%</div>
+                                        </div>
+                                        <div>
+                                            <div style="color: #9ca3af; font-size: 0.85em; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px;">Kalshi Probability</div>
+                                            <div style="color: #a5f3fc; font-size: 1.3em; font-weight: 700;">${opp.kalshi_probability.toFixed(1)}%</div>
+                                        </div>
+                                    </div>
+                                    <div style="border-top: 1px solid rgba(75, 85, 99, 0.3); padding-top: 12px;">
+                                        <div style="color: #9ca3af; font-size: 0.85em; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px;">Kalshi Odds</div>
+                                        <div style="display: flex; gap: 20px;">
+                                            <div>
+                                                <span style="color: #9ca3af; font-size: 0.9em;">YES:</span>
+                                                <span style="color: #6ee7b7; font-weight: 600; margin-left: 6px;">${yesPrice.toFixed(1)}¢</span>
+                                            </div>
+                                            <div>
+                                                <span style="color: #9ca3af; font-size: 0.9em;">NO:</span>
+                                                <span style="color: #a5f3fc; font-weight: 600; margin-left: 6px;">${noPrice.toFixed(1)}¢</span>
+                                            </div>
+                                        </div>
+                                    </div>
                                 </div>
+                                
+                                <div class="opportunity-recommendation">
+                                    <div class="opportunity-recommendation-text">
+                                        🎯 <strong>BET ON:</strong> ${betOnPlayer} @ ${yesPrice.toFixed(1)}¢
+                                </div>
+                                    <div class="opportunity-recommendation-details">
+                                        Trade Value: ${opp.trade_value.toFixed(1)}% | Edge: ${opp.value >= 0 ? '+' : ''}${opp.value.toFixed(1)}%
                             </div>
-                            <div style="margin-top:16px; padding-top:12px; border-top:1px solid rgba(75,85,99,0.3); color:#9ca3af; font-size:0.95em; line-height:1.6;">
-                                <div style="font-weight:600; color:#e5e7eb; margin-bottom:6px;">Why this is recommended</div>
-                                ${(() => {
-                                    try {
-                                        if (!latestPredictions || !latestPredictions['Random Forest']) return '';
-                                        const preds = latestPredictions['Random Forest'];
-                                        const betOnP1 = rfRec.bet_on === data.match.player1.name;
-                                        let modelPctStr;
-                                        if (betOnP1) {
-                                            modelPctStr = parseFloat(preds.player1_win_prob).toFixed(2);
-                                        } else {
-                                            modelPctStr = parseFloat(preds.player2_win_prob).toFixed(2);
-                                        }
-                                        const modelProb = parseFloat(modelPctStr) / 100;
-                                        const implied = 1 / parseFloat(rfRec.odds);
-                                        const impliedPct = (implied * 100).toFixed(2);
-                                        const edge = ((modelProb - implied) * 100).toFixed(2);
-                                        return `Our model estimates a ${modelPctStr}% chance vs implied ${impliedPct}% from the odds — a +${edge}% edge. Factors considered: overall Elo, surface-specific Elo, recent form, and head‑to‑head.`;
-                                    } catch { return ''; }
-                                })()}
+                                </div>
+                                
+                                <div style="text-align: center; margin-top: 12px;">
+                                    <span class="opportunity-ticker">${opp.ticker}</span>
                             </div>
                         </div>
                     `;
-                }
-                html += '</div>';
+                    });
+                    
+                    opportunitiesDiv.innerHTML = html;
+                    opportunitiesDiv.style.display = 'block';
             } else {
-                html += '<div class="prediction-card"><p style="color: #9ca3af; text-align: center;">No Random Forest value bet found at current odds</p></div>';
+                    opportunitiesDiv.innerHTML = '<div style="text-align: center; color: #9ca3af; padding: 20px;">No trading opportunities found at this time.</div>';
+                    opportunitiesDiv.style.display = 'block';
+                }
+            } catch (error) {
+                opportunitiesLoading.style.display = 'none';
+                opportunitiesError.textContent = `Unable to load opportunities: ${error.message}`;
+                opportunitiesError.style.display = 'block';
+            }
+        }
+
+        // Live Trading functionality
+        let tradingActive = false;
+        let tradingInterval = null;
+        let tradingEventSource = null;
+        let currentView = 'tradingPhase'; // 'tradingPhase' or 'logs'
+        let allLogs = []; // Store all logs for filtering
+        
+        function isTradingPhaseLog(message, type) {
+            // Trading Phase view: Show tradable opportunities and trade decisions
+            // Should show: how many possible trades (boundaries), which ones chosen, and why
+            const msg = message.toLowerCase();
+            
+            // EXCLUDE verbose debug messages (print statements from kalshi_analyzer.py)
+            if (msg.includes('parsed tennis match') || msg.includes('✓ parsed tennis match')) {
+                return false;
+            }
+            if (msg.includes('match volumes (aggregated by event)') || (msg.includes('📊') && msg.includes('match volumes'))) {
+                return false;
+            }
+            if (msg.includes('market discovery') && !msg.includes('scan summary')) {
+                return false;
+            }
+            if (msg.includes('best price candidate')) {
+                return false;
+            }
+            if (msg.includes('tradable opportunities:') && msg.includes('(after grouping by match)')) {
+                return false; // This is a print statement from kalshi_analyzer, not the actual section
+            }
+            // Exclude print statements from kalshi_analyzer.py debug mode
+            if (msg.includes('kalshi probability:') && !msg.includes('model probability')) {
+                return false; // This is a print statement, not a logger message
+            }
+            if (msg.includes('xgboost probability:')) {
+                return false; // This is a print statement
+            }
+            // Exclude separator lines (just equals signs)
+            if (msg.trim().match(/^=+$/)) {
+                return false;
+            }
+            // Exclude debug time fields messages
+            if (msg.includes('🔍 debug time fields') || msg.includes('🔍 debug time parsing')) {
+                return false;
+            }
+            if (msg.includes('time field used:') || msg.includes('all available time fields:') || 
+                msg.includes('parsed utc with z:') || msg.includes('adjusted for 3-hour offset:') ||
+                msg.includes('current est time:') || msg.includes('match est time:') || msg.includes('time difference:')) {
+                return false;
+            }
+            if (msg.includes('match_start_time:') || msg.includes('start_time:') || msg.includes('scheduled_time:') ||
+                msg.includes('expected_start_time:') || msg.includes('expected_expiration_time:') ||
+                msg.includes('expiration_time:') || msg.includes('close_time:') || msg.includes('event_close_time:')) {
+                return false;
+            }
+            // Exclude "Analyzed:" messages (they're from kalshi_analyzer print statements)
+            if (msg.includes('analyzed:') && msg.includes('failed:')) {
+                return false;
+            }
+            // Exclude "No bids available" warnings (they're in TRADING PHASE but too verbose)
+            // Actually, we want these - they explain why trades failed
+            // if (msg.includes('no bids available')) {
+            //     return false;
+            // }
+            
+            // INCLUDE SCAN SUMMARY: How many markets analyzed, how many tradable (boundaries)
+            if (msg.includes('📊') && msg.includes('scan summary')) {
+                return true;
+            }
+            if (msg.includes('markets analyzed:')) {
+                return true;
+            }
+            if (msg.includes('tradable opportunities:') && !msg.includes('(after grouping')) {
+                return true;
+            }
+            if (msg.includes('rejected:')) {
+                return true;
             }
             
-            valueBetsDiv.innerHTML = html;
+            // INCLUDE TRADABLE OPPORTUNITIES section: Which opportunities meet criteria (has 💰 emoji)
+            if (msg.includes('💰') || (msg.includes('tradable opportunities') && msg.includes('(') && !msg.includes('after grouping'))) {
+                return true;
+            }
+            
+            // INCLUDE Individual tradable opportunity details (from auto_trader logger.info)
+            // Lines like "[1/4] Will Michael Mmoh..."
+            if (msg.includes(']') && msg.includes('/') && msg.includes('will')) {
+                return true;
+            }
+            // Opportunity details: probabilities, odds, bet recommendation
+            if (msg.includes('model probability:') || msg.includes('model probability')) {
+                return true;
+            }
+            if (msg.includes('kalshi odds:') || (msg.includes('kalshi probability:') && msg.includes('model probability'))) {
+                return true; // Only include "Kalshi probability:" if it's part of "Model Probability | Kalshi Probability"
+            }
+            if (msg.includes('🎯') || msg.includes('bet on:')) {
+                return true;
+            }
+            if (msg.includes('edge:') && msg.includes('ev:')) {
+                return true;
+            }
+            
+            // INCLUDE NO TRADABLE OPPORTUNITIES message
+            if (msg.includes('no tradable opportunities found') || (msg.includes('⚠️') && msg.includes('no tradable'))) {
+                return true;
+            }
+            
+            // INCLUDE TRADING PHASE section: Which trades are placed and why (has 🔨 emoji)
+            if (msg.includes('🔨') || msg.includes('trading phase')) {
+                return true;
+            }
+            
+            // INCLUDE Trade execution results
+            if (msg.includes('✅') && (msg.includes('trade placed') || msg.includes('scan complete'))) {
+                return true;
+            }
+            if (msg.includes('❌') && msg.includes('trade failed')) {
+                return true;
+            }
+            if (msg.includes('no bids available')) {
+                return true; // Explains why trade failed
+            }
+            if (msg.includes('scan complete') || msg.includes('trades placed:')) {
+                return true;
+            }
+            
+            // Everything else goes to Logs view
+            return false;
         }
+        
+        function isImportantLog(message, type) {
+            // Logs view: Show EVERYTHING (all logs)
+            // This is the catch-all view that shows all log messages
+            return true;
+        }
+        
+        function filterAndDisplayLogs() {
+            const logContainer = document.getElementById('tradingLog');
+            const filtered = allLogs.filter(log => {
+                if (currentView === 'tradingPhase') {
+                    return isTradingPhaseLog(log.message, log.type);
+                } else {
+                    return isImportantLog(log.message, log.type);
+                }
+            });
+            
+            logContainer.innerHTML = '';
+            if (filtered.length === 0) {
+                logContainer.innerHTML = '<div style="color: #9ca3af; font-style: italic;">No logs to display for this view.</div>';
+                return;
+            }
+            
+            filtered.forEach(log => {
+                const timestamp = log.timestamp || new Date().toLocaleTimeString();
+                const colors = {
+                    'info': '#e8e9ea',
+                    'success': '#6ee7b7',
+                    'warning': '#fbbf24',
+                    'error': '#ef4444',
+                    'section': '#a5f3fc'
+                };
+                const color = colors[log.type] || colors.info;
+                const logEntry = document.createElement('div');
+                logEntry.style.color = color;
+                logEntry.style.marginBottom = '4px';
+                logEntry.textContent = `[${timestamp}] ${log.message}`;
+                logContainer.appendChild(logEntry);
+            });
+            logContainer.scrollTop = logContainer.scrollHeight;
+        }
+        
+        function addTradingLog(message, type = 'info') {
+            const timestamp = new Date().toLocaleTimeString();
+            // Store log
+            allLogs.push({ message, type, timestamp });
+            
+            // Only display if it matches current view filter
+            if (currentView === 'tradingPhase' && isTradingPhaseLog(message, type)) {
+                const logContainer = document.getElementById('tradingLog');
+                const colors = {
+                    'info': '#e8e9ea',
+                    'success': '#6ee7b7',
+                    'warning': '#fbbf24',
+                    'error': '#ef4444',
+                    'section': '#a5f3fc'
+                };
+                const color = colors[type] || colors.info;
+                const logEntry = document.createElement('div');
+                logEntry.style.color = color;
+                logEntry.style.marginBottom = '4px';
+                logEntry.textContent = `[${timestamp}] ${message}`;
+                logContainer.appendChild(logEntry);
+                logContainer.scrollTop = logContainer.scrollHeight;
+            } else if (currentView === 'logs' && isImportantLog(message, type)) {
+                const logContainer = document.getElementById('tradingLog');
+                const colors = {
+                    'info': '#e8e9ea',
+                    'success': '#6ee7b7',
+                    'warning': '#fbbf24',
+                    'error': '#ef4444',
+                    'section': '#a5f3fc'
+                };
+                const color = colors[type] || colors.info;
+                const logEntry = document.createElement('div');
+                logEntry.style.color = color;
+                logEntry.style.marginBottom = '4px';
+                logEntry.textContent = `[${timestamp}] ${message}`;
+                logContainer.appendChild(logEntry);
+                logContainer.scrollTop = logContainer.scrollHeight;
+            }
+        }
+        
+        async function startTrading() {
+            if (tradingActive) return;
+            
+            tradingActive = true;
+            const startBtn = document.getElementById('startTradingBtn');
+            const stopBtn = document.getElementById('stopTradingBtn');
+            const logContainer = document.getElementById('tradingLog');
+            
+            startBtn.style.display = 'none';
+            stopBtn.style.display = 'inline-block';
+            logContainer.innerHTML = '';
+            allLogs = []; // Reset logs when starting new trading session
+            
+            addTradingLog('🚀 Starting automated trading (DRY RUN mode)...', 'info');
+            addTradingLog('Scanning Kalshi markets for trading opportunities...', 'info');
+            
+            try {
+                const response = await fetch('/api/trading/start', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ mode: 'dry-run' })
+                });
+                
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.error || 'Failed to start trading');
+                }
+                
+                // For now, run a single scan and display results
+                // Later we can implement Server-Sent Events for real-time streaming
+                const data = await response.json();
+                if (data.logs) {
+                    data.logs.forEach(log => {
+                        addTradingLog(log.message, log.type || 'info');
+                    });
+                }
+                
+                if (data.trades_placed && data.trades_placed.length > 0) {
+                    addTradingLog(`✅ Trading cycle complete: ${data.trades_placed.length} trade(s) executed`, 'success');
+                } else {
+                    addTradingLog('ℹ️ Trading cycle complete: No trades executed', 'info');
+                }
+                
+            } catch (error) {
+                addTradingLog(`❌ Error: ${error.message}`, 'error');
+                stopTrading();
+            }
+        }
+        
+        function stopTrading() {
+            tradingActive = false;
+            const startBtn = document.getElementById('startTradingBtn');
+            const stopBtn = document.getElementById('stopTradingBtn');
+            
+            startBtn.style.display = 'inline-block';
+            stopBtn.style.display = 'none';
+            
+            if (tradingInterval) {
+                clearInterval(tradingInterval);
+                tradingInterval = null;
+            }
+            
+            if (tradingEventSource) {
+                tradingEventSource.close();
+                tradingEventSource = null;
+            }
+            
+            addTradingLog('⏹ Trading stopped', 'warning');
+        }
+        
+        // Load opportunities when page loads
+        document.addEventListener('DOMContentLoaded', () => {
+            loadOpportunities();
+            
+            // Start Trading button
+            const startBtn = document.getElementById('startTradingBtn');
+            if (startBtn) {
+                startBtn.addEventListener('click', startTrading);
+            }
+            
+            // Stop Trading button
+            const stopBtn = document.getElementById('stopTradingBtn');
+            if (stopBtn) {
+                stopBtn.addEventListener('click', stopTrading);
+            }
+            
+            // View toggle buttons
+            const tradingPhaseBtn = document.getElementById('tradingPhaseViewBtn');
+            const logsBtn = document.getElementById('logsViewBtn');
+            
+            if (tradingPhaseBtn) {
+                tradingPhaseBtn.addEventListener('click', () => {
+                    currentView = 'tradingPhase';
+                    tradingPhaseBtn.style.background = 'rgba(110, 231, 183, 0.2)';
+                    tradingPhaseBtn.style.borderColor = 'rgba(110, 231, 183, 0.4)';
+                    tradingPhaseBtn.style.color = '#6ee7b7';
+                    logsBtn.style.background = 'rgba(75, 85, 99, 0.2)';
+                    logsBtn.style.borderColor = 'rgba(75, 85, 99, 0.4)';
+                    logsBtn.style.color = '#9ca3af';
+                    filterAndDisplayLogs();
+                });
+            }
+            
+            if (logsBtn) {
+                logsBtn.addEventListener('click', () => {
+                    currentView = 'logs';
+                    logsBtn.style.background = 'rgba(110, 231, 183, 0.2)';
+                    logsBtn.style.borderColor = 'rgba(110, 231, 183, 0.4)';
+                    logsBtn.style.color = '#6ee7b7';
+                    tradingPhaseBtn.style.background = 'rgba(75, 85, 99, 0.2)';
+                    tradingPhaseBtn.style.borderColor = 'rgba(75, 85, 99, 0.4)';
+                    tradingPhaseBtn.style.color = '#9ca3af';
+                    filterAndDisplayLogs();
+                });
+            }
+        });
     </script>
 </body>
 </html>

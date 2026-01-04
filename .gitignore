@@ -59,5 +59,6 @@ keys/*.pfx
 *.ipynb
 
 # Logs
+logs/
 *.log
 

@@ -35,13 +35,16 @@ class PlayerStatsDB:
             loser_name = str(row.get("loser_name", "")).strip()
             loser_id = row.get("loser_id")
             
+            # Handle both string and integer IDs
             if winner_name and pd.notna(winner_id):
-                self.name_to_id[winner_name.lower()] = int(winner_id)
-                self.id_to_name[int(winner_id)] = winner_name
+                winner_id_str = str(winner_id)
+                self.name_to_id[winner_name.lower()] = winner_id_str
+                self.id_to_name[winner_id_str] = winner_name
             
             if loser_name and pd.notna(loser_id):
-                self.name_to_id[loser_name.lower()] = int(loser_id)
-                self.id_to_name[int(loser_id)] = loser_name
+                loser_id_str = str(loser_id)
+                self.name_to_id[loser_name.lower()] = loser_id_str
+                self.id_to_name[loser_id_str] = loser_name
         
         # Initialize Elo systems
         elo = Elo(base=1500, k=24)
@@ -60,8 +63,9 @@ class PlayerStatsDB:
         
         for _, row in matches.iterrows():
             surface = row["surface"]
-            winner_id = int(row["winner_id"])
-            loser_id = int(row["loser_id"])
+            # Handle both string and integer IDs
+            winner_id = str(row["winner_id"])
+            loser_id = str(row["loser_id"])
             winner_age = row.get("winner_age")
             loser_age = row.get("loser_age")
             winner_ht = row.get("winner_ht")
@@ -175,11 +179,20 @@ class PlayerStatsDB:
         return self.player_stats[player_id]
     
     def get_h2h(self, player1_id, player2_id):
-        """Get head-to-head win rate difference for two players."""
+        """
+        Get head-to-head win rate difference for two players.
+        
+        Returns: (player1_wins / total) - (player2_wins / total)
+        This means:
+        - Positive value: player1 has better H2H record
+        - Negative value: player2 has better H2H record
+        - When you swap players, the sign flips: h2h(p2, p1) = -h2h(p1, p2)
+        """
         key = tuple(sorted([player1_id, player2_id]))
         if key not in self.h2h_matches:
             return 0.0
         
+        # Get wins for both players from the sorted key
         p1_wins = self.h2h_matches[key].get(player1_id, 0)
         p2_wins = self.h2h_matches[key].get(player2_id, 0)
         total = p1_wins + p2_wins
@@ -187,8 +200,12 @@ class PlayerStatsDB:
         if total == 0:
             return 0.0
         
+        # Calculate win rates
         p1_wr = p1_wins / total
         p2_wr = p2_wins / total
+        
+        # Return difference: p1_wr - p2_wr
+        # This will automatically flip sign when players are swapped
         return p1_wr - p2_wr
     
     def get_surface_elo(self, player_id, surface="Hard"):

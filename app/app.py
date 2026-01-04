@@ -16,6 +16,9 @@ from flask import Flask, render_template, request, jsonify
 from config.settings import PORT, DEBUG, HOST, MODELS_DIR, RAW_DATA_DIR
 from src.api.player_stats import PlayerStatsDB
 from src.api.predictor import MatchPredictor
+from src.trading.kalshi_client import KalshiClient
+from src.trading.kalshi_analyzer import KalshiMarketAnalyzer
+from src.trading.auto_trader import AutoTrader
 
 # Initialize Flask app
 # Set template folder relative to project root
@@ -25,11 +28,13 @@ app = Flask(__name__, template_folder=str(_project_root / 'templates'))
 # Global service instances (initialized on startup)
 player_db = None
 predictor = None
+kalshi_analyzer = None
+auto_trader = None
 
 
 def initialize_services():
     """Initialize all services on application startup."""
-    global player_db, predictor
+    global player_db, predictor, kalshi_analyzer, auto_trader
     
     try:
         print("=" * 70)
@@ -41,6 +46,33 @@ def initialize_services():
         
         print("Loading prediction models...")
         predictor = MatchPredictor(models_dir=str(MODELS_DIR))
+        
+        print("Initializing Kalshi analyzer...")
+        try:
+            kalshi_client = KalshiClient()
+            kalshi_analyzer = KalshiMarketAnalyzer(
+                kalshi_client=kalshi_client,
+                player_db=player_db,
+                predictor=predictor
+            )
+            print("✅ Kalshi analyzer initialized")
+            
+            # Initialize auto trader (only if Kalshi is available)
+            print("Initializing auto trader...")
+            auto_trader = AutoTrader(
+                kalshi_client=kalshi_client,
+                analyzer=kalshi_analyzer,
+                min_value_threshold=0.02,  # 2% edge
+                min_ev_threshold=0.05,     # 5% EV
+                max_hours_ahead=336,       # 14 days
+                min_volume=5000            # $5k minimum
+            )
+            print("✅ Auto trader initialized")
+        except Exception as e:
+            print(f"⚠️  Warning: Kalshi analyzer not available: {e}")
+            print("   Opportunities and trading features will be disabled")
+            kalshi_analyzer = None
+            auto_trader = None
         
         print("=" * 70)
         print("✅ System initialized successfully")
@@ -136,6 +168,8 @@ def predict():
     h2h_diff = player_db.get_h2h(p1_id, p2_id)
     
     # Build features and predict
+    # IMPORTANT: The model predicts probability that player1 (p1) wins
+    # So if p1=Mmoh and p2=Garin, it predicts Mmoh's win probability
     features_df = predictor.build_features(
         p1_stats, p2_stats,
         surface=surface,
@@ -146,6 +180,12 @@ def predict():
     )
     
     predictions = predictor.predict(features_df)
+    
+    # Debug: Print parameters used (can be removed in production)
+    if DEBUG:
+        print(f"Prediction parameters: p1={player1_name}, p2={player2_name}, surface={surface}, "
+              f"round={round_code}, level={tourney_level_code}, best_of_5={best_of_5}, h2h_diff={h2h_diff:.3f}")
+        print(f"XGBoost prediction (p1 wins): {predictions.get('xgboost', 'N/A')}")
     
     # Format response
     model_display_names = {
@@ -181,6 +221,236 @@ def predict():
     return jsonify(results)
 
 
+@app.route('/api/opportunities', methods=['GET'])
+def get_opportunities():
+    """Get top Kalshi trading opportunities ranked by volume and value."""
+    if kalshi_analyzer is None:
+        return jsonify({"error": "Kalshi analyzer not available"}), 503
+    
+    # Get parameters
+    limit = int(request.args.get('limit', 5))  # Number of opportunities to return (default 5)
+    max_markets = int(request.args.get('max_markets', 1000))  # Markets to scan
+    min_value = float(request.args.get('min_value', 0.05))  # Minimum value threshold
+    min_ev = float(request.args.get('min_ev', 0.10))  # Minimum EV threshold
+    max_hours = int(request.args.get('max_hours', 48))  # Max hours ahead
+    min_volume = int(request.args.get('min_volume', 0))  # Min market volume
+    
+    try:
+        # Scan markets
+        tradable, _ = kalshi_analyzer.scan_markets(
+            limit=max_markets,
+            min_value=min_value,
+            min_ev=min_ev,
+            debug=False,
+            show_all=False,
+            max_hours_ahead=max_hours,
+            min_volume=min_volume
+        )
+        
+        if not tradable:
+            return jsonify({"opportunities": []})
+        
+        # Sort by market volume (descending) - top opportunities by volume
+        tradable.sort(key=lambda x: x.get("market_volume") or 0, reverse=True)
+        
+        # Take top N (default 5)
+        top_opportunities = tradable[:limit]
+        
+        # Format for frontend
+        opportunities = []
+        for opp in top_opportunities:
+            # Use raw model probabilities for both players (not adjusted for Kalshi's question)
+            raw_p1_prob = opp.get("raw_model_probability_p1", opp.get("model_probability", 0))
+            raw_p2_prob = opp.get("raw_model_probability_p2", 1.0 - opp.get("model_probability", 0))
+            
+            # Get parameters used for this prediction (for debugging/consistency)
+            surface = opp.get("surface", "Hard")
+            round_code = opp.get("round_code", 7)
+            tourney_level_code = opp.get("tourney_level_code", 2)
+            best_of_5 = opp.get("best_of_5", False)
+            
+            kalshi_odds = opp.get("kalshi_odds", {})
+            bet_on_player = opp.get("bet_on_player")
+            if not bet_on_player:
+                # Fallback: determine from trade_side
+                matched_players = opp.get("matched_players", ("", ""))
+                trade_side = opp.get("trade_side", "")
+                if trade_side == "yes":
+                    bet_on_player = matched_players[0] if matched_players else ""
+                else:
+                    bet_on_player = matched_players[1] if len(matched_players) > 1 else ""
+            
+            opportunities.append({
+                "title": opp.get("title", "Unknown Market"),
+                "ticker": opp.get("ticker", ""),
+                "players": {
+                    "player1": opp.get("matched_players", ("", ""))[0],
+                    "player2": opp.get("matched_players", ("", ""))[1]
+                },
+                "model_probability_p1": round(raw_p1_prob * 100, 1),
+                "model_probability_p2": round(raw_p2_prob * 100, 1),
+                "kalshi_probability": round(opp.get("kalshi_probability", 0) * 100, 1),
+                "model_probability": round(opp.get("model_probability", 0) * 100, 1),  # Adjusted probability
+                "value": round(opp.get("value", 0) * 100, 1),
+                "expected_value": round(opp.get("expected_value", 0) * 100, 1),
+                "trade_side": opp.get("trade_side", ""),
+                "trade_value": round(opp.get("trade_value", 0) * 100, 1),
+                "kalshi_price": kalshi_odds.get("yes_price", 0),
+                "kalshi_odds": {
+                    "yes_price": kalshi_odds.get("yes_price", 0),
+                    "no_price": kalshi_odds.get("no_price", 0)
+                },
+                "bet_on_player": bet_on_player,
+                "market_volume": opp.get("market_volume", 0),
+                "reason": opp.get("reason", ""),
+                # Add parameters for debugging
+                "parameters": {
+                    "surface": surface,
+                    "round_code": round_code,
+                    "tourney_level_code": tourney_level_code,
+                    "best_of_5": best_of_5
+                }
+            })
+        
+        return jsonify({"opportunities": opportunities})
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/trading/start', methods=['POST'])
+def start_trading():
+    """Start automated trading (dry-run or live mode)."""
+    if auto_trader is None:
+        return jsonify({"error": "Auto trader not available"}), 503
+    
+    data = request.get_json() or {}
+    mode = data.get('mode', 'dry-run')  # 'dry-run' or 'live'
+    
+    if mode not in ['dry-run', 'live']:
+        return jsonify({"error": "Invalid mode. Must be 'dry-run' or 'live'"}), 400
+    
+    try:
+        import logging
+        import io
+        from logging import StreamHandler
+        from contextlib import redirect_stdout, redirect_stderr
+        
+        # Create a log capturer to capture logger output
+        class LogCaptureHandler(StreamHandler):
+            def __init__(self):
+                super().__init__()
+                self.logs = []
+            
+            def emit(self, record):
+                try:
+                    msg = self.format(record)
+                    self.logs.append(msg)
+                except Exception:
+                    self.handleError(record)
+        
+        # Capture logs - auto_trader uses logger.info() for output
+        log_capture = LogCaptureHandler()
+        log_capture.setLevel(logging.INFO)
+        formatter = logging.Formatter('%(message)s')
+        log_capture.setFormatter(formatter)
+        
+        # Get the auto_trader's logger and add our capture handler
+        # auto_trader.py uses logger = logging.getLogger(__name__), which is 'src.trading.auto_trader'
+        trader_logger = logging.getLogger('src.trading.auto_trader')
+        original_level = trader_logger.level  # Save original level
+        original_handlers = trader_logger.handlers[:]  # Save original handlers
+        trader_logger.addHandler(log_capture)
+        trader_logger.setLevel(logging.INFO)
+        trader_logger.propagate = False  # Prevent duplicate logs
+        
+        # Also capture stdout/stderr for any print statements
+        stdout_capture = io.StringIO()
+        stderr_capture = io.StringIO()
+        
+        logs = []
+        try:
+            # Run a single trading cycle (scan and trade)
+            with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
+                trades_placed = auto_trader.scan_and_trade()
+            
+            # Get captured logs
+            captured_logs = log_capture.logs
+            stdout_output = stdout_capture.getvalue()
+            stderr_output = stderr_capture.getvalue()
+            
+            # Process captured logger output
+            if captured_logs:
+                for log in captured_logs:
+                    if log.strip():
+                        # Determine log type from content
+                        log_type = "info"
+                        log_text = log.strip()
+                        if "✅" in log_text or "SUCCESS" in log_text.upper() or "PLACED" in log_text.upper() or "COMPLETE" in log_text.upper():
+                            log_type = "success"
+                        elif "⚠️" in log_text or "WARNING" in log_text.upper():
+                            log_type = "warning"
+                        elif "❌" in log_text or "ERROR" in log_text.upper() or "FAILED" in log_text.upper():
+                            log_type = "error"
+                        elif "🔨" in log_text or "TRADING PHASE" in log_text.upper() or "SCAN SUMMARY" in log_text.upper() or "TRADABLE OPPORTUNITIES" in log_text.upper():
+                            log_type = "section"
+                        logs.append({"message": log_text, "type": log_type})
+            
+            # Process stdout (for any print statements) - but exclude verbose debug prints from kalshi_analyzer
+            if stdout_output:
+                for line in stdout_output.strip().split('\n'):
+                    if line.strip():
+                        line_lower = line.strip().lower()
+                        # Exclude verbose debug print statements from kalshi_analyzer.py
+                        if 'parsed tennis match' in line_lower or '✓ parsed tennis match' in line_lower:
+                            continue
+                        if 'match volumes (aggregated by event)' in line_lower:
+                            continue
+                        if 'market discovery' in line_lower and 'scan summary' not in line_lower:
+                            continue
+                        if 'best price candidate' in line_lower:
+                            continue
+                        if 'kalshi probability:' in line_lower and 'model probability' not in line_lower:
+                            continue  # Exclude standalone "Kalshi probability:" print statements
+                        if 'xgboost probability:' in line_lower:
+                            continue
+                        logs.append({"message": line.strip(), "type": "info"})
+            
+            # Process stderr
+            if stderr_output:
+                for line in stderr_output.strip().split('\n'):
+                    if line.strip():
+                        logs.append({"message": line.strip(), "type": "error"})
+            
+            # Restore original state
+            trader_logger.removeHandler(log_capture)
+            trader_logger.handlers = original_handlers
+            trader_logger.setLevel(original_level if original_level else logging.INFO)
+            
+        except Exception as e:
+            # Restore original state even on error
+            trader_logger.removeHandler(log_capture)
+            trader_logger.handlers = original_handlers
+            trader_logger.setLevel(original_level if original_level else logging.INFO)
+            raise
+        
+        return jsonify({
+            "status": "completed",
+            "mode": mode,
+            "trades_placed": trades_placed or [],
+            "trades_count": len(trades_placed) if trades_placed else 0,
+            "logs": logs
+        })
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            "error": str(e),
+            "logs": [{"message": f"❌ Error: {str(e)}", "type": "error"}]
+        }), 500
 
 
 if __name__ == '__main__':

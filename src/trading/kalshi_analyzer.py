@@ -6,11 +6,48 @@ and generates predictions for value trading opportunities.
 import re
 from typing import Dict, List, Optional, Tuple, Any
 from difflib import SequenceMatcher
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+try:
+    from zoneinfo import ZoneInfo  # Python 3.9+
+except ImportError:
+    try:
+        from backports.zoneinfo import ZoneInfo  # Python < 3.9 with backports
+    except ImportError:
+        # Fallback: use pytz if available
+        try:
+            import pytz
+            ZoneInfo = lambda tz: pytz.timezone(tz)
+        except ImportError:
+            # Last resort: manual EST offset (UTC-5, doesn't handle DST)
+            ZoneInfo = None
 from src.trading.kalshi_client import KalshiClient
 from src.trading.kalshi_discovery import fetch_events, flatten_markets, filter_tennis_markets
 from src.api.player_stats import PlayerStatsDB
 from src.api.predictor import MatchPredictor
+
+
+def format_time_est(dt: datetime) -> str:
+    """Convert UTC datetime to EST and format for display."""
+    if not dt:
+        return ""
+    if ZoneInfo:
+        try:
+            est_tz = ZoneInfo("America/New_York")  # Handles EST/EDT automatically
+            # If naive, assume EST; if has timezone, convert to EST
+            if dt.tzinfo is None:
+                if hasattr(est_tz, 'localize'):
+                    est_dt = est_tz.localize(dt)
+                else:
+                    est_dt = dt.replace(tzinfo=est_tz)
+            else:
+                est_dt = dt.astimezone(est_tz)
+            return est_dt.strftime('%Y-%m-%d %I:%M %p EST')
+        except:
+            pass
+    # Fallback: show UTC if EST conversion fails
+    if dt.tzinfo:
+        return dt.strftime('%Y-%m-%d %H:%M UTC')
+    return dt.strftime('%Y-%m-%d %H:%M')
 
 
 class KalshiMarketAnalyzer:
@@ -43,7 +80,7 @@ class KalshiMarketAnalyzer:
         
         # Common tennis tournament keywords to filter markets
         self.tennis_keywords = [
-            "tennis", "atp", "wta", "grand slam", "wimbledon", 
+            "tennis", "atp", "grand slam", "wimbledon", 
             "us open", "french open", "australian open", "roland garros",
             "united cup", "davis cup", "atp cup", "laver cup"
         ]
@@ -77,19 +114,48 @@ class KalshiMarketAnalyzer:
                     print(f"   Strategy 1: Searching markets by tennis series tickers...")
                 
                 # Known tennis series tickers from Kalshi
-                tennis_series = ["KXATPMATCH", "KXWTAMATCH", "KXUNITEDCUPMATCH"]
+                tennis_series = ["KXATPMATCH", "KXUNITEDCUPMATCH"]  # ATP only
                 
                 all_markets_from_series = []
                 for series in tennis_series:
                     try:
                         if debug:
                             print(f"   Searching series: {series}...")
-                        response = self.kalshi.get_markets(
-                            series_ticker=series,
-                            status="open",
-                            limit=min(limit, 1000)
-                        )
-                        series_markets = response.get("markets", [])
+                        
+                        # Use pagination to fetch ALL markets, not just first batch
+                        series_markets = []
+                        cursor = None
+                        max_batch_size = 1000
+                        total_fetched = 0
+                        
+                        while True:
+                            batch_limit = min(max_batch_size, limit - total_fetched)
+                            if batch_limit <= 0:
+                                break
+                            
+                            response = self.kalshi.get_markets(
+                                series_ticker=series,
+                                status="open",
+                                limit=batch_limit,
+                                cursor=cursor
+                            )
+                            
+                            batch_markets = response.get("markets", [])
+                            if batch_markets:
+                                series_markets.extend(batch_markets)
+                                total_fetched += len(batch_markets)
+                                if debug and len(batch_markets) == batch_limit:
+                                    print(f"   Fetched {len(batch_markets)} markets (total: {total_fetched})...")
+                            
+                            # Check for pagination cursor
+                            cursor = response.get("cursor")
+                            if not cursor or len(batch_markets) < batch_limit:
+                                break  # No more pages or got fewer than requested
+                            
+                            # Safety limit: don't fetch more than requested
+                            if total_fetched >= limit:
+                                break
+                        
                         if series_markets:
                             if debug:
                                 print(f"   ✅ Found {len(series_markets)} markets in {series}")
@@ -125,6 +191,9 @@ class KalshiMarketAnalyzer:
                             event_market_pairs,
                             max_hours=max_hours_ahead,
                             min_volume=min_volume,
+                            min_minutes_before=10,  # Minimum: trades placed at least 10 min before match start
+                            max_minutes_before=None,  # No maximum time limit
+                            min_volume_for_no_max=5000,  # (Deprecated - no longer used)
                             log_rejections=debug
                         )
                         
@@ -183,58 +252,45 @@ class KalshiMarketAnalyzer:
                 if all_markets:
                     markets = all_markets
             
-            # Apply discovery filtering if we have markets from event search
-            # Note: Markets from event search are already filtered by keyword in the event search,
-            # so we don't need to filter by keyword again - just apply volume and time filters
+            # Apply full filtering to all markets (Strategy 1, 2, or 3)
+            # All markets need to go through the robust layered filtering for consistency
             if markets and not event_ticker:
-                # Apply volume and time filters only (keyword already applied via event search)
                 try:
-                    # Filter by volume and time, but skip keyword filtering since events are already tennis-related
-                    filtered = []
+                    # Convert markets to event-market pairs format for filtering
+                    event_market_pairs = []
                     for market in markets:
-                        # Check volume
-                        vol = market.get("volume_dollars") or market.get("liquidity_dollars") or market.get("volume", 0)
-                        try:
-                            vol = float(vol) if vol else 0
-                            if vol > 1000:
-                                vol = vol / 100.0
-                        except (ValueError, TypeError):
-                            vol = 0
-                        
-                        if vol < min_volume:
-                            continue
-                        
-                        # Check time (if we have close time)
-                        if market.get("event_close_time"):
-                            try:
-                                close_time = market.get("event_close_time")
-                                if isinstance(close_time, str):
-                                    if 'T' in close_time:
-                                        close_dt = datetime.fromisoformat(close_time.replace('Z', '+00:00'))
-                                    else:
-                                        close_dt = datetime.strptime(close_time, "%Y-%m-%d %H:%M:%S")
-                                        close_dt = close_dt.replace(tzinfo=timezone.utc)
-                                else:
-                                    close_dt = datetime.now(timezone.utc)
-                                
-                                if close_dt.tzinfo is None:
-                                    close_dt = close_dt.replace(tzinfo=timezone.utc)
-                                else:
-                                    close_dt = close_dt.astimezone(timezone.utc)
-                                
-                                now = datetime.now(timezone.utc)
-                                time_diff = (close_dt - now).total_seconds() / 3600
-                                
-                                if not (-2 <= time_diff <= max_hours_ahead):
-                                    continue
-                            except Exception:
-                                pass  # If time parsing fails, include the market
-                        
-                        filtered.append(market)
+                        # Create a normalized event from market data
+                        normalized_event = {
+                            "event_title": market.get("event_title", ""),
+                            "event_description": market.get("event_description", ""),
+                            "event_ticker": market.get("event_ticker", ""),
+                            "event_close_time": market.get("event_close_time") or market.get("close_time"),
+                            "category": market.get("category", ""),
+                            "series_ticker": market.get("series_ticker", ""),
+                        }
+                        event_market_pairs.append((normalized_event, market))
+                    
+                    # Apply robust layered filtering (same as Strategy 2)
+                    if debug:
+                        print(f"   🔍 Applying full filtering to {len(event_market_pairs)} markets...")
+                    filtered_markets = filter_tennis_markets(
+                        event_market_pairs,
+                        max_hours=max_hours_ahead,
+                        min_volume=min_volume,
+                        min_minutes_before=10,  # Minimum: trades placed at least 10 min before match start
+                        max_minutes_before=None,  # No maximum time limit
+                        min_volume_for_no_max=10000,  # (Deprecated - no longer used)
+                        log_rejections=debug
+                    )
+                    
+                    # Convert back to original market format
+                    valid_tickers = {m.get("market_ticker") for m in filtered_markets}
+                    filtered = [m for m in markets if m.get("ticker") in valid_tickers]
+                    
+                    if debug:
+                        print(f"   ✅ After full filtering: {len(filtered)} markets (from {len(markets)} original)")
                     
                     markets = filtered
-                    if debug:
-                        print(f"   ✅ After filtering (volume/time): {len(markets)} markets")
                 except Exception as e:
                     if debug:
                         print(f"   ⚠️  Filtering error (continuing with unfiltered): {e}")
@@ -274,8 +330,13 @@ class KalshiMarketAnalyzer:
             parsed_count = 0
             skipped_no_parse = 0
             from datetime import timezone
-            # Use UTC-aware datetime for consistent comparison
-            now = datetime.now(timezone.utc)
+            # Work entirely in EST - no UTC
+            if ZoneInfo:
+                est_tz = ZoneInfo("America/New_York")
+            else:
+                est_tz = timezone(timedelta(hours=-5))
+            
+            now = datetime.now(est_tz)
             max_time = now + timedelta(hours=max_hours_ahead)
             
             if debug:
@@ -291,7 +352,7 @@ class KalshiMarketAnalyzer:
                     full_text = f"{title} {subtitle}"
                     
                     # Check for tennis keywords
-                    if any(kw in full_text for kw in ['tennis', 'atp', 'wta', 'united cup', 'davis cup']):
+                    if any(kw in full_text for kw in ['tennis', 'atp', 'united cup', 'davis cup']):
                         tennis_keywords_in_markets.append(m.get('title', 'N/A'))
                     
                     # Check for known player names
@@ -350,16 +411,6 @@ class KalshiMarketAnalyzer:
                                 break
                         print(f"     - {title}{marker} (ticker: {ticker})")
                     
-                    # Specifically search for "zhang" in ALL markets
-                    zhang_markets = [(m.get('title', 'N/A'), m.get('ticker', 'N/A'), m.get('subtitle', '')) 
-                                     for m in markets if 'zhang' in (m.get('title', '') + ' ' + m.get('subtitle', '')).lower()]
-                    if zhang_markets:
-                        print(f"\n   🔍 Found {len(zhang_markets)} markets containing 'Zhang':")
-                        for title, ticker, subtitle in zhang_markets[:10]:
-                            subtitle_str = f" (subtitle: {subtitle})" if subtitle else ""
-                            print(f"     - {title}{subtitle_str} (ticker: {ticker})")
-                    else:
-                        print(f"\n   ⚠️  No markets found containing 'Zhang' in first {len(markets)} markets!")
                 else:
                     print(f"   ⚠️  No markets found with 'vs' in title at all!")
             
@@ -391,47 +442,54 @@ class KalshiMarketAnalyzer:
                 # IMPORTANT: Don't filter out markets that are very close (they might be starting soon!)
                 market_time = self._parse_market_time(market)
                 if market_time:
-                    # Normalize to UTC-aware for comparison
-                    if market_time.tzinfo is None:
-                        # Naive datetime - assume UTC
-                        market_time = market_time.replace(tzinfo=timezone.utc)
+                    # Work entirely in EST - no UTC conversion
+                    if ZoneInfo:
+                        est_tz = ZoneInfo("America/New_York")
                     else:
-                        # Already aware - convert to UTC
-                        market_time = market_time.astimezone(timezone.utc)
+                        est_tz = timezone(timedelta(hours=-5))
                     
-                    time_diff = (market_time - now).total_seconds() / 3600  # hours
+                    # Ensure timezone is EST
+                    if market_time.tzinfo is None:
+                        # Naive datetime - assume EST
+                        if hasattr(est_tz, 'localize'):
+                            market_time = est_tz.localize(market_time)
+                        else:
+                            market_time = market_time.replace(tzinfo=est_tz)
+                    elif market_time.tzinfo != est_tz:
+                        # Convert to EST if it's another timezone (shouldn't happen if we parse correctly)
+                        market_time = market_time.astimezone(est_tz)
+                    
+                    now_est = datetime.now(est_tz)
+                    time_diff = (market_time - now_est).total_seconds() / 3600  # hours
                     
                     # Only skip if market is more than max_hours_ahead away
                     if time_diff > max_hours_ahead:
                         if debug:
-                            print(f"  Skipped (too far): {market.get('title', 'N/A')} (time: {market_time.strftime('%Y-%m-%d %H:%M')}, {time_diff:.1f}h away)")
+                            est_time = format_time_est(market_time)
+                            print(f"  Skipped (too far): {market.get('title', 'N/A')} (time: {est_time}, {time_diff:.1f}h away)")
                         continue
                     
                     # Don't skip markets that are very close (even if slightly in the past)
                     # Markets might still be tradeable if they're within a few hours
                     if time_diff < -2:  # More than 2 hours in the past
                         if debug:
-                            print(f"  Skipped (too far past): {market.get('title', 'N/A')} (time: {market_time.strftime('%Y-%m-%d %H:%M')}, {time_diff:.1f}h ago)")
+                            est_time = format_time_est(market_time)
+                            print(f"  Skipped (too far past): {market.get('title', 'N/A')} (time: {est_time}, {time_diff:.1f}h ago)")
                         continue
                     
                     # Log markets that are very close (might be starting soon)
                     if debug and -1 < time_diff < 3:  # Between 1 hour ago and 3 hours ahead
-                        print(f"  ⏰ Market starting soon: {market.get('title', 'N/A')} (time: {market_time.strftime('%Y-%m-%d %H:%M')}, {time_diff:.1f}h {'ago' if time_diff < 0 else 'ahead'})")
+                        est_time = format_time_est(market_time)
+                        print(f"  ⏰ Market starting soon: {market.get('title', 'N/A')} (time: {est_time}, {time_diff:.1f}h {'ago' if time_diff < 0 else 'ahead'})")
                 
-                # Filter by volume if specified
-                if min_volume > 0:
-                    market_volume = self._get_market_volume(market)
-                    if market_volume is None or market_volume < min_volume:
-                        if debug:
-                            vol_str = f"${market_volume:,.0f}" if market_volume else "unknown"
-                            print(f"  Skipped (low volume): {market.get('title', 'N/A')} (volume: {vol_str})")
-                        continue  # Skip markets below minimum volume
+                # NOTE: Volume filtering is now done in scan_markets AFTER aggregation
+                # This ensures we use total match volume, not individual market volume
                 
                 # If we got here, it's a valid tennis market
                 tennis_markets.append(market)
                 parsed_count += 1
                 if debug and parsed_count <= 10:
-                    time_str = market_time.strftime("%Y-%m-%d %H:%M") if market_time else "N/A"
+                    time_str = format_time_est(market_time) if market_time else "N/A"
                     volume_str = f" (volume: ${self._get_market_volume(market):,.0f})" if self._get_market_volume(market) else ""
                     players_str = f" ({players[0]} vs {players[1]})"
                     print(f"  ✓ Parsed tennis match: {market.get('title', 'N/A')}{players_str} (time: {time_str}{volume_str})")
@@ -490,7 +548,32 @@ class KalshiMarketAnalyzer:
                     print(f"  - Use --event-ticker <TICKER> to filter for that event")
                     print(f"  - Example: python3 scripts/trading/scan_kalshi_markets.py --event-ticker TENNIS-UNITEDCUP-2024")
             
-            return tennis_markets
+            # Final WTA exclusion filter - explicitly remove any WTA markets that slipped through
+            wta_keywords = ["wta", "women's tennis", "women tennis", "women's tour", "wta tour", 
+                           "kxwtamatch", "kxwta", "wta match", "wta tennis"]
+            filtered_tennis_markets = []
+            for market in tennis_markets:
+                # Check all text fields for WTA keywords
+                title = (market.get("title", "") or "").lower()
+                subtitle = (market.get("subtitle", "") or "").lower()
+                ticker = (market.get("ticker", "") or "").lower()
+                event_title = (market.get("event_title", "") or "").lower()
+                series_ticker = (market.get("series_ticker", "") or "").lower()
+                
+                full_text = f"{title} {subtitle} {ticker} {event_title} {series_ticker}"
+                
+                # Skip if contains any WTA keyword
+                if any(wta_kw in full_text for wta_kw in wta_keywords):
+                    if debug:
+                        print(f"   ❌ Excluding WTA market: {market.get('ticker', 'Unknown')} - {title[:60]}")
+                    continue
+                
+                filtered_tennis_markets.append(market)
+            
+            if debug and len(tennis_markets) != len(filtered_tennis_markets):
+                print(f"   ⚠️  Excluded {len(tennis_markets) - len(filtered_tennis_markets)} WTA markets")
+            
+            return filtered_tennis_markets
         except Exception as e:
             print(f"Error fetching markets: {e}")
             import traceback
@@ -501,77 +584,217 @@ class KalshiMarketAnalyzer:
         """
         Parse market start time from market data.
         
-        Tries various field names: expected_expiration_time, expiration_time, 
-        expected_expiration, start_time, etc.
+        Tries various field names, prioritizing match start times over expiration times.
+        Expiration times might be when the market closes (after match ends), not when match starts.
         """
-        # Try various possible field names
+        # Try various possible field names, in priority order
+        # Market-level fields are preferred (they're match-specific)
+        # CRITICAL: Prioritize match START times over expiration/close times
+        # Expiration times are when the market CLOSES (after match ends), not when match starts
         time_fields = [
-            "expected_expiration_time",
-            "expiration_time", 
-            "expected_expiration",
-            "start_time",
-            "event_time",
-            "market_time",
-            "expires_at"
+            "match_start_time",        # Explicit match start (BEST - use this if available)
+            "start_time",              # Market start time
+            "scheduled_time",          # Scheduled time
+            "expected_start_time",      # Expected start time
+            "expected_expiration_time", # Market expiration (might be match end, but closer than event end)
+            "expiration_time",         # Market expiration
+            "close_time",              # Market close time
+            "expected_expiration",     # Alternative expiration field
+            "event_time",              # Event time
+            "market_time",             # Market time
+            "expires_at"               # Expires at
         ]
+        
+        # Work entirely in EST - no UTC
+        if ZoneInfo:
+            est_tz = ZoneInfo("America/New_York")
+        else:
+            est_tz = timezone(timedelta(hours=-5))
+        
+        now = datetime.now(est_tz)
+        best_time = None
+        best_diff = float('inf')
         
         for field in time_fields:
             time_val = market.get(field)
             if time_val:
                 try:
                     # Try parsing as ISO format string
+                    # CRITICAL: Kalshi API returns times in UTC (with 'Z' suffix)
+                    # We MUST parse as UTC first, then convert to EST for all calculations
+                    utc_tz = timezone.utc
+                    
                     if isinstance(time_val, str):
                         # Handle different formats
                         if 'T' in time_val:
-                            # ISO format: "2024-01-26T14:30:00Z"
-                            dt = datetime.fromisoformat(time_val.replace('Z', '+00:00'))
+                            # ISO format - check for timezone marker
+                            if time_val.endswith('Z'):
+                                # Explicitly UTC - parse as UTC, then convert to EST
+                                dt_utc = datetime.fromisoformat(time_val.replace('Z', '+00:00'))
+                                dt = dt_utc.astimezone(est_tz)
+                            elif '+' in time_val or (time_val.count('-') > 2 and 'T' in time_val):
+                                # Has timezone offset - parse as-is, then convert to EST
+                                dt_parsed = datetime.fromisoformat(time_val)
+                                dt = dt_parsed.astimezone(est_tz)
+                            else:
+                                # No timezone marker - assume UTC (Kalshi default), then convert to EST
+                                date_part = time_val.split('T')[0]
+                                time_part = time_val.split('T')[1].split('+')[0].split('-')[0].split('Z')[0]
+                                naive_dt = datetime.strptime(f"{date_part} {time_part}", "%Y-%m-%d %H:%M:%S")
+                                dt_utc = naive_dt.replace(tzinfo=utc_tz)
+                                dt = dt_utc.astimezone(est_tz)
                         else:
-                            # Try other formats
-                            dt = datetime.strptime(time_val, "%Y-%m-%d %H:%M:%S")
-                        return dt
+                            # Non-ISO format - assume UTC, then convert to EST
+                            naive_dt = datetime.strptime(time_val, "%Y-%m-%d %H:%M:%S")
+                            dt_utc = naive_dt.replace(tzinfo=utc_tz)
+                            dt = dt_utc.astimezone(est_tz)
                     elif isinstance(time_val, (int, float)):
-                        # Unix timestamp
-                        return datetime.fromtimestamp(time_val)
+                        # Unix timestamp - parse as UTC, then convert to EST
+                        dt_utc = datetime.fromtimestamp(time_val, tz=utc_tz)
+                        dt = dt_utc.astimezone(est_tz)
+                    else:
+                        continue
+                    
+                    # CRITICAL FIX: Kalshi times appear to be 3 hours ahead of actual match start
+                    # Subtract 3 hours to get the actual match start time
+                    # This accounts for a systematic offset in Kalshi's time data
+                    dt = dt - timedelta(hours=3)
+                    
+                    # Work entirely in EST for calculations
+                    # Calculate time difference in EST
+                    time_diff_hours = abs((dt - now).total_seconds() / 3600)
+                    
+                    # Prefer times that are:
+                    # 1. In the future (or very recent past, within 2 hours)
+                    # 2. Not suspiciously far (> 7 days = likely tournament end)
+                    # 3. Closer to now (more likely to be match start)
+                    if -2 <= time_diff_hours < 168:  # Between 2 hours ago and 7 days ahead
+                        if time_diff_hours < best_diff:
+                            best_time = dt
+                            best_diff = time_diff_hours
+                    
                 except (ValueError, TypeError):
                     continue
         
-        return None
+        # Return the best time found, or None if none found
+        return best_time
     
-    def _get_market_volume(self, market: Dict[str, Any]) -> Optional[float]:
+    def _get_market_volume(self, market: Dict[str, Any], fetch_fresh: bool = True) -> Optional[float]:
         """
         Get market volume/pot size from market data.
         
-        Tries various field names: volume, total_volume, pot, total_pot,
-        liquidity, open_interest, etc.
+        Tries to fetch fresh market data if available, then tries various field names.
         
-        Returns volume in dollars (cents / 100), or None if not found.
+        Args:
+            market: Market dictionary (may be stale)
+            fetch_fresh: If True, try to fetch fresh market data from API
+            
+        Returns volume in dollars, or None if not found.
         """
-        # Try various possible field names (volume might be in cents)
+        ticker = market.get("ticker")
+        
+        # Try to fetch fresh market data if we have a ticker
+        fresh_market = None
+        client = getattr(self, 'kalshi', None) or getattr(self, 'client', None) or getattr(self, 'kalshi_client', None)
+        if fetch_fresh and ticker and client:
+            try:
+                # Try to get fresh market data
+                # Extract event_ticker from market ticker
+                event_ticker = None
+                if ticker and '-' in ticker:
+                    parts = ticker.rsplit('-', 1)
+                    if len(parts) == 2:
+                        event_ticker = parts[0]
+                markets_response = client.get_markets(event_ticker=event_ticker, limit=1) if event_ticker else None
+                if not markets_response:
+                    pass  # Fall back to provided market data
+                else:
+                    markets_list = markets_response.get("markets", [])
+                if markets_list:
+                    fresh_market = markets_list[0]
+            except Exception:
+                # If fetching fails, fall back to provided market data
+                pass
+        
+        # Use fresh market if available, otherwise use provided market
+        market_to_check = fresh_market if fresh_market else market
+        
+        # Try various possible field names (volume might be in cents or dollars)
+        # Order matters - try most specific first
+        # NOTE: Kalshi website shows "volume" which is current market volume in dollars
+        # The API might return this in different fields or units
         volume_fields = [
-            "volume",
-            "total_volume",
-            "pot",
-            "total_pot",
-            "liquidity",
-            "open_interest",
-            "total_liquidity",
-            "market_volume"
+            "volume_dollars",  # Most specific - explicitly in dollars (traded volume)
+            "volume",  # Generic volume - this is the current market volume (traded volume)
+            "volume_24h",  # 24-hour volume (traded volume)
+            # NOTE: Do NOT use liquidity_dollars or liquidity - these are orderbook depth, not traded volume
+            # "liquidity_dollars" is the total money available to trade, not what has been traded
+            # Kalshi website shows "volume" which is the amount that has been traded
+            # Avoid these - they might be cumulative or total:
+            # "total_volume", "total_volume_dollars", "total_pot", "pot_dollars",
+            # "open_interest", "total_liquidity", "market_volume"
+            # Don't use yes_volume/no_volume - these are per-side volumes, not total market volume
         ]
         
         for field in volume_fields:
-            volume_val = market.get(field)
-            if volume_val is not None:
+            volume_val = market_to_check.get(field)
+            if volume_val is not None and volume_val != 0:
                 try:
-                    # Volume might be in cents, convert to dollars
-                    if isinstance(volume_val, (int, float)):
-                        # If it's a large number (> 1000), assume it's in cents
-                        if volume_val > 1000:
-                            return volume_val / 100.0
+                    volume_float = float(volume_val)
+                    
+                    # If field name contains "dollars", it's already in dollars
+                    if "dollars" in field.lower():
+                        return volume_float
+                    
+                    # Kalshi API volumes: need to determine if in cents or dollars
+                    # Based on Kalshi API documentation and behavior:
+                    # - "volume" field is typically in cents for the API
+                    # - "volume_dollars" field is explicitly in dollars
+                    # 
+                    # Heuristic: 
+                    # - If >= 1,000,000, definitely in cents (even $10k = 1M cents)
+                    # - If 10,000-1,000,000, could be either - but for active markets,
+                    #   volumes are typically $1k-$50k, so:
+                    #   - If we see 28,559, it's probably already in dollars
+                    #   - If we see 2,855,900, it's definitely in cents
+                    # - If < 10,000, assume already in dollars
+                    if volume_float >= 1000000:
+                        # Very large number - definitely in cents, convert to dollars
+                        return volume_float / 100.0
+                    elif volume_float >= 10000:
+                        # Medium-large number - could be either
+                        # For tennis markets, if it's in the 10k-1M range:
+                        # - If it's a round number like 28,559 (close to expected $28.5k), it's probably dollars
+                        # - If it's much larger like 2,855,900, it's in cents
+                        # Conservative: if > 100k, assume cents; otherwise assume dollars
+                        if volume_float > 100000:
+                            return volume_float / 100.0
                         else:
-                            # Otherwise assume it's already in dollars
-                            return float(volume_val)
+                            # Between 10k-100k, assume already in dollars (matches Kalshi website display)
+                            return volume_float
+                    else:
+                        # Small number - assume already in dollars
+                        return volume_float
                 except (ValueError, TypeError):
                     continue
+        
+        # If still not found, try to calculate from orderbook
+        client = getattr(self, 'kalshi', None) or getattr(self, 'client', None) or getattr(self, 'kalshi_client', None)
+        if ticker and client:
+            try:
+                orderbook = client.get_orderbook(ticker)
+                # Some orderbooks have volume information
+                orderbook_volume = orderbook.get("volume") or orderbook.get("total_volume")
+                if orderbook_volume:
+                    volume_float = float(orderbook_volume)
+                    if volume_float > 10000:
+                        return volume_float / 100.0
+                    elif volume_float > 1000:
+                        return volume_float / 100.0
+                    else:
+                        return volume_float
+            except Exception:
+                pass
         
         return None
     
@@ -599,18 +822,36 @@ class KalshiMarketAnalyzer:
         
         # Pattern 1: "Will [Player1] win the [Player1] vs [Player2] : [Info] match?"
         # Example: "Will Stefanos Tsitsipas win the Harris vs Tsitsipas : Group E match?"
+        # Example: "Will Michael Mmoh win the Garin vs Mmoh : Qualification Round 1 match?"
         # Updated to handle hyphenated and multi-word names
         pattern1a = r"will\s+([A-Za-z\s]+?)\s+win\s+the\s+([A-Za-z\-\']+(?:\s+[A-Za-z\-\']+)?)\s+vs\.?\s+([A-Za-z\-\']+(?:\s+[A-Za-z\-\']+)?)"
         match1a = re.search(pattern1a, full_text, re.IGNORECASE)
         if match1a:
-            player1 = match1a.group(1).strip()
+            asked_player = match1a.group(1).strip()  # The player Kalshi is asking about
             # Extract players from "Player1 vs Player2" part
             p1_from_vs = match1a.group(2).strip()
             p2_from_vs = match1a.group(3).strip()
-            # Remove any trailing info like ": Group E match"
+            # Remove any trailing info like ": Group E match" or ": Qualification Round 1 match"
             p2_from_vs = re.sub(r"\s*:\s*.*$", "", p2_from_vs)
-            # Return the players from the "vs" part (more reliable)
-            return (p1_from_vs, p2_from_vs)
+            
+            # Determine which player Kalshi is asking about and order them consistently
+            # Match by last name (more reliable)
+            asked_lower = asked_player.lower()
+            p1_lower = p1_from_vs.lower()
+            p2_lower = p2_from_vs.lower()
+            
+            asked_last = asked_lower.split()[-1] if asked_lower.split() else ""
+            p1_last = p1_lower.split()[-1] if p1_lower.split() else ""
+            p2_last = p2_lower.split()[-1] if p2_lower.split() else ""
+            
+            # If Kalshi is asking about the second player in "vs", swap them so the asked player is player1
+            # This ensures consistent ordering: the player Kalshi asks about becomes player1
+            if asked_last == p2_last or (p2_last and asked_last == p2_last):
+                # Kalshi is asking about player2, so swap to make them player1
+                return (p2_from_vs, p1_from_vs)
+            else:
+                # Kalshi is asking about player1, keep order as-is
+                return (p1_from_vs, p2_from_vs)
         
         # Pattern 1b: "Will [Player] win?" with "vs [Opponent]" in subtitle
         # This is the key pattern - we need to identify which player Kalshi is asking about
@@ -664,7 +905,7 @@ class KalshiMarketAnalyzer:
             
             # If tournament name is too long or looks like a player name, adjust
             if len(tournament.split()) <= 3 and any(t in tournament.lower() for t in 
-                ["cup", "open", "atp", "wta", "championship", "masters", "grand slam"]):
+                ["cup", "open", "atp", "championship", "masters", "grand slam"]):
                 # First group is tournament, next two are players
                 return (player1, player2)
             else:
@@ -689,7 +930,7 @@ class KalshiMarketAnalyzer:
                 p2 = match.group(2).strip()
                 # Check if p1 looks like a tournament name
                 is_tournament = (len(p1.split()) > 1 and 
-                               any(term in p1.lower() for term in ["cup", "open", "championship", "atp", "wta", "tour"]))
+                               any(term in p1.lower() for term in ["cup", "open", "championship", "atp", "tour"]))
                 if not is_tournament:
                     best_match = match
                     break
@@ -715,8 +956,8 @@ class KalshiMarketAnalyzer:
                     player2 = re.sub(r"\s*:\s*.*$", "", player2)
             
             # Clean up player names - remove any remaining tournament info
-            player1 = re.sub(r"^(united\s+cup|atp|wta|davis\s+cup)\s+", "", player1, flags=re.IGNORECASE).strip()
-            player2 = re.sub(r"^(united\s+cup|atp|wta|davis\s+cup)\s+", "", player2, flags=re.IGNORECASE).strip()
+            player1 = re.sub(r"^(united\s+cup|atp|davis\s+cup)\s+", "", player1, flags=re.IGNORECASE).strip()
+            player2 = re.sub(r"^(united\s+cup|atp|davis\s+cup)\s+", "", player2, flags=re.IGNORECASE).strip()
             
             return (player1, player2)
         
@@ -1224,11 +1465,83 @@ class KalshiMarketAnalyzer:
             "no_odds": no_odds
         }
     
+    def _infer_match_parameters(self, market: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Infer match parameters from market title/subtitle.
+        Returns dict with surface, best_of_5, round_code, tourney_level_code.
+        """
+        title = market.get("title", "").lower()
+        subtitle = market.get("subtitle", "").lower()
+        full_text = f"{title} {subtitle}".lower()
+        
+        # Default values
+        params = {
+            "surface": "Hard",
+            "best_of_5": False,
+            "round_code": 7,  # Final
+            "tourney_level_code": 2  # ATP Tour
+        }
+        
+        # Infer surface
+        if any(word in full_text for word in ["clay", "roland garros", "french open"]):
+            params["surface"] = "Clay"
+        elif any(word in full_text for word in ["grass", "wimbledon"]):
+            params["surface"] = "Grass"
+        elif any(word in full_text for word in ["hard", "us open", "australian open"]):
+            params["surface"] = "Hard"
+        
+        # Infer round - check specific patterns first
+        # Priority: Check for "round of 128" or "r128" first (most specific)
+        if "round of 128" in full_text or "r128" in full_text:
+            params["round_code"] = 1
+        elif "round of 64" in full_text or "r64" in full_text:
+            params["round_code"] = 2
+        elif "round of 32" in full_text or "r32" in full_text:
+            params["round_code"] = 3
+        elif "round of 16" in full_text or "r16" in full_text or "fourth round" in full_text:
+            params["round_code"] = 4
+        elif "quarterfinal" in full_text or "qf" in full_text:
+            params["round_code"] = 5
+        elif "semifinal" in full_text or "sf" in full_text:
+            params["round_code"] = 6
+        elif "final" in full_text:
+            params["round_code"] = 7
+        # Check qualification rounds (can be round 1, 2, or 3)
+        # IMPORTANT: Check for "qualification round 1" pattern specifically
+        elif "qualification" in full_text or "qualifier" in full_text or "qualifying" in full_text:
+            # Look for "round 1", "round 2", "round 3" in qualification context
+            # Use word boundaries to avoid matching "round 10" as "round 1"
+            if re.search(r'\bround\s+1\b', full_text, re.IGNORECASE):
+                params["round_code"] = 1
+            elif re.search(r'\bround\s+2\b', full_text, re.IGNORECASE):
+                params["round_code"] = 2
+            elif re.search(r'\bround\s+3\b', full_text, re.IGNORECASE):
+                params["round_code"] = 3
+            else:
+                # Default qualification to round 1 if not specified
+                params["round_code"] = 1
+        
+        # Infer tournament level
+        if any(word in full_text for word in ["grand slam", "wimbledon", "us open", "french open", "australian open", "roland garros"]):
+            params["tourney_level_code"] = 4  # Grand Slam
+            params["best_of_5"] = True
+        elif "masters" in full_text or "1000" in full_text:
+            params["tourney_level_code"] = 3  # Masters
+        elif "challenger" in full_text:
+            params["tourney_level_code"] = 1  # Challenger
+        elif "futures" in full_text:
+            params["tourney_level_code"] = 1  # Futures
+        elif "atp" in full_text:
+            # If "atp" is mentioned (e.g., "ATP Match"), assume ATP Tour (level 2)
+            params["tourney_level_code"] = 2  # ATP Tour
+        
+        return params
+    
     def analyze_market(self, market: Dict[str, Any], 
-                      surface: str = "Hard",
-                      best_of_5: bool = False,
-                      round_code: int = 7,
-                      tourney_level_code: int = 2,
+                      surface: Optional[str] = None,
+                      best_of_5: Optional[bool] = None,
+                      round_code: Optional[int] = None,
+                      tourney_level_code: Optional[int] = None,
                       min_value: float = 0.05,
                       min_ev: float = 0.10,
                       debug: bool = False) -> Optional[Dict[str, Any]]:
@@ -1262,6 +1575,26 @@ class KalshiMarketAnalyzer:
             }
         
         kalshi_p1, kalshi_p2 = players
+        
+        # Infer match parameters from market if not provided
+        inferred_params = self._infer_match_parameters(market)
+        if surface is None:
+            surface = inferred_params["surface"]
+        if best_of_5 is None:
+            best_of_5 = inferred_params["best_of_5"]
+        if round_code is None:
+            round_code = inferred_params["round_code"]
+        if tourney_level_code is None:
+            tourney_level_code = inferred_params["tourney_level_code"]
+        
+        if debug:
+            print(f"  Match parameters:")
+            print(f"    Surface: {surface} (inferred: {inferred_params['surface']})")
+            print(f"    Best of 5: {best_of_5} (inferred: {inferred_params['best_of_5']})")
+            print(f"    Round code: {round_code} (inferred: {inferred_params['round_code']})")
+            print(f"    Tournament level: {tourney_level_code} (inferred: {inferred_params['tourney_level_code']})")
+            print(f"    Market title: '{market.get('title', 'N/A')}'")
+            print(f"    Market subtitle: '{market.get('subtitle', 'N/A')}'")
         
         # Determine which player Kalshi is asking about (the "yes" side of the market)
         # Check if market title has "Will [Player] win" pattern
@@ -1379,9 +1712,24 @@ class KalshiMarketAnalyzer:
             }
         
         # Get H2H (returns winrate difference: p1_wr - p2_wr)
+        # IMPORTANT: H2H is calculated as (p1_wins / total) - (p2_wins / total)
+        # So if we swap players, the sign flips: h2h(p1, p2) = -h2h(p2, p1)
         h2h_diff = self.player_db.get_h2h(p1_id, p2_id)
         
+        if debug:
+            print(f"  H2H record: {db_p1} vs {db_p2}")
+            print(f"    H2H diff (p1-p2): {h2h_diff:.3f}")
+            if h2h_diff > 0:
+                print(f"    → {db_p1} has better H2H record")
+            elif h2h_diff < 0:
+                print(f"    → {db_p2} has better H2H record")
+            else:
+                print(f"    → No H2H history or tied")
+        
         # Build features and predict
+        # IMPORTANT: The model predicts probability that player1 (p1) wins
+        # So if p1=Garin and p2=Mmoh, it predicts Garin's win probability
+        # If p1=Mmoh and p2=Garin, it predicts Mmoh's win probability
         features = self.predictor.build_features(
             p1_stats, p2_stats, surface=surface,
             best_of_5=best_of_5, round_code=round_code,
@@ -1389,7 +1737,19 @@ class KalshiMarketAnalyzer:
             h2h_diff=h2h_diff
         )
         
-        predictions = self.predictor.predict(features)
+        # Use symmetry enforcement to ensure consistent predictions
+        predictions = self.predictor.predict(features, enforce_symmetry=True)
+        
+        if debug:
+            print(f"  Model prediction parameters:")
+            print(f"    Player1: {db_p1} (ID: {p1_id})")
+            print(f"    Player2: {db_p2} (ID: {p2_id})")
+            print(f"    Surface: {surface}")
+            print(f"    Best of 5: {best_of_5}")
+            print(f"    Round code: {round_code}")
+            print(f"    Tournament level: {tourney_level_code}")
+            print(f"    H2H diff (p1-p2): {h2h_diff:.3f}")
+            print(f"    XGBoost prediction (p1 wins): {predictions.get('xgboost', 'N/A')}")
         
         # Get Kalshi odds
         kalshi_odds = self.get_market_odds(market, debug=debug)
@@ -1518,8 +1878,83 @@ class KalshiMarketAnalyzer:
             else:
                 reason.append(f"Expected value: {expected_value:.1%}")
         
-        # Get market volume for ranking
-        market_volume = self._get_market_volume(market)
+        # Get market volume for ranking (fetch fresh data to ensure accuracy)
+        market_volume = self._get_market_volume(market, fetch_fresh=True)
+        
+        if debug:
+            if market_volume:
+                print(f"  Market volume: ${market_volume:,.0f}")
+                # Also show raw values for debugging to help diagnose volume issues
+                ticker = market.get("ticker")
+                if ticker:
+                    try:
+                        client = getattr(self, 'kalshi', None)
+                        if client:
+                            # Extract event_ticker from market ticker
+                            event_ticker = None
+                            if ticker and '-' in ticker:
+                                parts = ticker.rsplit('-', 1)
+                                if len(parts) == 2:
+                                    event_ticker = parts[0]
+                            fresh = client.get_markets(event_ticker=event_ticker, limit=1) if event_ticker else None
+                            if fresh and fresh.get("markets"):
+                                raw_market = fresh["markets"][0]
+                                print(f"    Raw volume fields from API (for debugging):")
+                                for field in ["volume", "volume_dollars", "liquidity", "liquidity_dollars", 
+                                            "pot", "total_volume", "total_pot", "open_interest", 
+                                            "yes_volume", "no_volume"]:
+                                    val = raw_market.get(field)
+                                    if val is not None:
+                                        print(f"      {field}: {val} ({type(val).__name__})")
+                    except Exception as e:
+                        print(f"    Could not fetch raw data: {e}")
+            else:
+                print(f"  ⚠️  Market volume: Not available")
+        
+        # Always print volume debug info if volume seems too high (to help diagnose)
+        if market_volume and market_volume > 50000:  # If volume seems too high
+            print(f"  ⚠️  WARNING: Market volume seems high (${market_volume:,.0f}). Checking raw API data...")
+            ticker = market.get("ticker")
+            if ticker:
+                try:
+                    client = getattr(self, 'kalshi', None)
+                    if client:
+                        # Extract event_ticker from market ticker
+                        event_ticker = None
+                        if ticker and '-' in ticker:
+                            parts = ticker.rsplit('-', 1)
+                            if len(parts) == 2:
+                                event_ticker = parts[0]
+                        fresh = client.get_markets(event_ticker=event_ticker, limit=1) if event_ticker else None
+                        if fresh and fresh.get("markets"):
+                            raw_market = fresh["markets"][0]
+                            print(f"    All volume-related fields from API:")
+                            for field in ["volume", "volume_dollars", "liquidity", "liquidity_dollars", 
+                                        "pot", "total_volume", "total_pot", "open_interest", 
+                                        "yes_volume", "no_volume", "total_yes_volume", "total_no_volume"]:
+                                val = raw_market.get(field)
+                                if val is not None:
+                                    print(f"      {field}: {val} ({type(val).__name__})")
+                except Exception as e:
+                    print(f"    Could not fetch raw data: {e}")
+        
+        # Store raw model prediction for player1 (before adjustment)
+        # This is the probability that player1 (db_p1) wins
+        raw_model_prob_p1 = avg_prediction
+        raw_model_prob_p2 = 1.0 - avg_prediction
+        
+        # Determine which player we're betting on for clearer display
+        # If trade_side is "yes", we're betting on the player Kalshi is asking about
+        # If trade_side is "no", we're betting against the player Kalshi is asking about
+        bet_on_player = None
+        if trade_side:
+            if asked_is_p1:
+                bet_on_player = db_p1 if trade_side == "yes" else db_p2
+            elif asked_is_p2:
+                bet_on_player = db_p2 if trade_side == "yes" else db_p1
+            else:
+                # Fallback: if we can't determine, assume trade_side "yes" means player1
+                bet_on_player = db_p1 if trade_side == "yes" else db_p2
         
         return {
             "market": market,
@@ -1528,17 +1963,22 @@ class KalshiMarketAnalyzer:
             "kalshi_players": (kalshi_p1, kalshi_p2),
             "matched_players": (db_p1, db_p2),
             "predictions": predictions,
-            "model_probability": model_prob,
+            "model_probability": model_prob,  # Adjusted for Kalshi's question
+            "raw_model_probability_p1": raw_model_prob_p1,  # Raw: probability player1 wins
+            "raw_model_probability_p2": raw_model_prob_p2,  # Raw: probability player2 wins
             "kalshi_odds": kalshi_odds,
             "kalshi_probability": kalshi_prob,
             "value": value,
             "expected_value": expected_value,
             "trade_side": trade_side,
             "trade_value": trade_value,
+            "bet_on_player": bet_on_player,  # Player name we're betting on
             "tradable": trade_side is not None,
             "reason": "; ".join(reason) if reason else "No analysis available",
             "surface": surface,
             "best_of_5": best_of_5,
+            "round_code": round_code,  # Add for debugging
+            "tourney_level_code": tourney_level_code,  # Add for debugging
             "market_volume": market_volume  # Add volume for ranking
         }
     
@@ -1562,28 +2002,235 @@ class KalshiMarketAnalyzer:
         Returns:
             Tuple of (tradable_opportunities, all_analyses)
         """
-        markets = self.fetch_tennis_markets(limit=limit, debug=debug, max_hours_ahead=max_hours_ahead, min_volume=min_volume)
+        # NOTE: min_volume filtering is now done AFTER aggregation, so we pass min_volume=0 to fetch_tennis_markets
+        # This ensures we use total match volume, not individual market volume
+        markets = self.fetch_tennis_markets(limit=limit, debug=debug, max_hours_ahead=max_hours_ahead, min_volume=0)
+        
+        # Aggregate volumes by event_ticker (markets for the same match)
+        # Group markets by event_ticker to sum volumes
+        event_volumes = {}
+        for market in markets:
+            event_ticker = market.get("event_ticker")
+            if event_ticker:
+                volume = self._get_market_volume(market, fetch_fresh=False)  # Don't fetch fresh for all markets
+                if volume:
+                    if event_ticker not in event_volumes:
+                        event_volumes[event_ticker] = 0
+                    event_volumes[event_ticker] += volume
+        
+        if debug and event_volumes:
+            print(f"\n📊 Match volumes (aggregated by event):")
+            for event_ticker, total_vol in sorted(event_volumes.items(), key=lambda x: x[1], reverse=True)[:5]:
+                print(f"  {event_ticker}: ${total_vol:,.0f}")
+        
+        # Filter by total match volume AFTER aggregation
+        # This ensures we use total match volume (sum of all markets for a match), not individual market volume
+        if min_volume > 0:
+            filtered_markets = []
+            skipped_by_volume = {}  # Track which events were skipped and why
+            for market in markets:
+                event_ticker = market.get("event_ticker")
+                if event_ticker and event_ticker in event_volumes:
+                    total_match_volume = event_volumes[event_ticker]
+                    if total_match_volume >= min_volume:
+                        # Volume is sufficient, include this market
+                        filtered_markets.append(market)
+                    else:
+                        # Track skipped markets for debug output
+                        if event_ticker not in skipped_by_volume:
+                            skipped_by_volume[event_ticker] = {
+                                "volume": total_match_volume,
+                                "markets": []
+                            }
+                        skipped_by_volume[event_ticker]["markets"].append(market)
+                        # Skip this market (low total match volume)
+                else:
+                    # No event_ticker or not in event_volumes - include it anyway
+                    # (We can't filter it by volume without event_ticker, so we allow it through)
+                    filtered_markets.append(market)
+            
+            if debug and skipped_by_volume:
+                print(f"\n⚠️  Skipped {len(skipped_by_volume)} matches (low total volume < ${min_volume:,}):")
+                for event_ticker, info in sorted(skipped_by_volume.items(), key=lambda x: x[1]["volume"], reverse=True)[:5]:
+                    vol_str = f"${info['volume']:,.0f}"
+                    market_titles = [m.get("title", "Unknown")[:50] for m in info["markets"][:2]]  # Show first 2 markets
+                    titles_str = " | ".join(market_titles)
+                    print(f"  {event_ticker}: {vol_str} - {titles_str}")
+            
+            markets = filtered_markets
+        
         tradable = []
         all_analyses = []
         
-        print(f"Scanning {len(markets)} tennis markets...")
+        if debug:
+            print(f"\n{'=' * 70}")
+            print(f"📊 MARKET DISCOVERY")
+            print(f"{'=' * 70}")
+            print(f"   Found: {len(markets)} tennis markets")
+            if len(markets) > 0:
+                print(f"   Example: {markets[0].get('title', 'Unknown')[:60]}...")
+            if len(markets) < 5:
+                print(f"   ⚠️  Low market count - check filters")
         
+        print(f"\n   Analyzing {len(markets)} markets...", end="", flush=True)
+        
+        failed_analyses = []  # Track markets that failed analysis entirely
+        
+        # First pass: analyze all markets (don't add to tradable yet - we'll filter in second pass)
         for i, market in enumerate(markets):
             if (i + 1) % 10 == 0:
-                print(f"  Processed {i + 1}/{len(markets)} markets...")
+                print(f" {i + 1}/{len(markets)}", end="", flush=True)
+            
+            # Get total match volume (sum of all markets for this event)
+            event_ticker = market.get("event_ticker")
+            total_match_volume = None
+            if event_ticker and event_ticker in event_volumes:
+                total_match_volume = event_volumes[event_ticker]
             
             analysis = self.analyze_market(market, min_value=min_value, min_ev=min_ev, debug=debug)
             
             if analysis:
-                all_analyses.append(analysis)
+                # Override market volume with total match volume if available
+                if total_match_volume is not None:
+                    analysis["market_volume"] = total_match_volume
+                    analysis["total_match_volume"] = total_match_volume  # Add for clarity
+                    if debug:
+                        individual_vol = self._get_market_volume(market, fetch_fresh=False)
+                        individual_vol_str = f"${individual_vol:,.0f}" if individual_vol is not None else "N/A"
+                        print(f"  Market {market.get('ticker', 'Unknown')}: Individual volume {individual_vol_str}, Total match volume ${total_match_volume:,.0f}")
                 
-                # Check if tradable
-                if analysis.get("tradable") and analysis.get("trade_value", 0) >= min_value:
-                    if analysis.get("expected_value", 0) >= min_ev:
-                        tradable.append(analysis)
+                all_analyses.append(analysis)
+            else:
+                # Market failed analysis (e.g., player matching failed, no odds, etc.)
+                failed_analyses.append({
+                    "ticker": market.get("ticker", "Unknown"),
+                    "title": market.get("title", "Unknown Market"),
+                    "reason": "Analysis failed (likely player matching or odds extraction issue)"
+                })
         
-        print(f"Analyzed {len(all_analyses)} markets")
-        print(f"Found {len(tradable)} tradable opportunities")
+        print(f" Done")
+        
+        if debug:
+            print(f"   Analyzed: {len(all_analyses)} | Failed: {len(failed_analyses)}")
+        
+        # Second pass: Group by event/match and select only the favored player's opportunity
+        # Group analyses by event_ticker (markets for the same match)
+        match_groups = {}
+        for analysis in all_analyses:
+            event_ticker = analysis.get("market", {}).get("event_ticker")
+            if not event_ticker:
+                # Try to extract from ticker: KXATPMATCH-26JAN03SWEOCO-THO -> KXATPMATCH-26JAN03SWEOCO
+                ticker = analysis.get("ticker", "")
+                if '-' in ticker:
+                    parts = ticker.rsplit('-', 1)
+                    if len(parts) == 2:
+                        event_ticker = parts[0]
+            
+            if event_ticker:
+                if event_ticker not in match_groups:
+                    match_groups[event_ticker] = []
+                match_groups[event_ticker].append(analysis)
+        
+        # For each match, determine which player the model favors and only keep that opportunity
+        for event_ticker, match_analyses in match_groups.items():
+            if len(match_analyses) < 2:
+                # Only one market for this match, process normally
+                for analysis in match_analyses:
+                    if analysis.get("tradable") and analysis.get("trade_value", 0) >= min_value:
+                        if analysis.get("expected_value", 0) >= min_ev:
+                            tradable.append(analysis)
+                continue
+            
+            # Multiple markets for the same match - determine which player the model favors
+            # Get raw model probabilities from first analysis (they should be the same for all markets in the same match)
+            raw_p1_prob = None
+            raw_p2_prob = None
+            matched_players = None
+            
+            for analysis in match_analyses:
+                raw_p1_prob = analysis.get("raw_model_probability_p1")
+                raw_p2_prob = analysis.get("raw_model_probability_p2")
+                matched_players = analysis.get("matched_players")
+                if raw_p1_prob is not None and raw_p2_prob is not None:
+                    break  # Got the probabilities, exit loop
+            
+            # Determine which player the model predicts will win
+            if raw_p1_prob is not None and raw_p2_prob is not None:
+                model_favors_p1 = raw_p1_prob > raw_p2_prob
+                favored_player_idx = 0 if model_favors_p1 else 1
+                favored_player_name = matched_players[favored_player_idx] if matched_players else None
+                
+                if debug and favored_player_name:
+                    print(f"\n  Match {event_ticker}: Model favors {favored_player_name} ({max(raw_p1_prob, raw_p2_prob):.1%} vs {min(raw_p1_prob, raw_p2_prob):.1%})")
+                
+                # Find the analysis for the favored player's market
+                # We need to identify which market is asking about the favored player
+                # Use the matched_players tuple to determine player order
+                favored_market_analysis = None
+                best_edge = -1
+                
+                for analysis in match_analyses:
+                    matched_players_analysis = analysis.get("matched_players", ())
+                    if not matched_players_analysis or len(matched_players_analysis) < 2:
+                        continue
+                    
+                    # Get the player names from this analysis
+                    p1_name = matched_players_analysis[0]
+                    p2_name = matched_players_analysis[1]
+                    
+                    # Determine which player this market is asking about
+                    # The model_prob tells us: if it's close to raw_p1_prob, it's asking about p1
+                    # If it's close to raw_p2_prob, it's asking about p2
+                    model_prob = analysis.get("model_probability")
+                    kalshi_prob = analysis.get("kalshi_probability", 0)
+                    
+                    if model_prob is None or kalshi_prob is None:
+                        continue
+                    
+                    # Determine which player this market is asking about by comparing model_prob to raw probabilities
+                    # Use a larger tolerance (0.10 = 10%) to account for rounding differences
+                    is_p1_market = abs(model_prob - raw_p1_prob) < abs(model_prob - raw_p2_prob)
+                    
+                    # This market is for the favored player if:
+                    # - Model favors p1 and this is a p1 market, OR
+                    # - Model favors p2 and this is a p2 market (which means it's NOT a p1 market)
+                    is_favored_player_market = (model_favors_p1 and is_p1_market) or (not model_favors_p1 and not is_p1_market)
+                    
+                    if is_favored_player_market:
+                        # Calculate edge (model_prob - kalshi_prob)
+                        edge = model_prob - kalshi_prob
+                        
+                        # Only consider if edge > 2% (0.02)
+                        if edge > 0.02:
+                            if edge > best_edge:
+                                best_edge = edge
+                                favored_market_analysis = analysis
+                
+                # Only add the favored player's opportunity (if found and edge > 2%)
+                if favored_market_analysis and favored_market_analysis.get("tradable"):
+                    if favored_market_analysis.get("expected_value", 0) >= min_ev:
+                        tradable.append(favored_market_analysis)
+            else:
+                # Couldn't determine favored player, process all normally (fallback)
+                for analysis in match_analyses:
+                    if analysis.get("tradable") and analysis.get("trade_value", 0) >= min_value:
+                        if analysis.get("expected_value", 0) >= min_ev:
+                            tradable.append(analysis)
+        
+        if debug:
+            print(f"   Tradable opportunities: {len(tradable)} (after grouping by match)")
+        
+        # Add failed analyses to all_analyses for reporting
+        if show_all:
+            for failed in failed_analyses:
+                all_analyses.append({
+                    "ticker": failed["ticker"],
+                    "title": failed["title"],
+                    "tradable": False,
+                    "reason": failed["reason"],
+                    "value": 0,
+                    "expected_value": 0,
+                })
         
         # Sort tradable opportunities by market volume (descending) for more reliable odds
         # Markets with higher volume have tighter spreads and more reliable pricing

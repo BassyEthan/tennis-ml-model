@@ -108,9 +108,13 @@ class MatchPredictor:
         features_df = pd.DataFrame([features])[FEATURES]
         return features_df
     
-    def predict(self, features_df):
+    def predict(self, features_df, enforce_symmetry=True):
         """
         Run predictions with all loaded models.
+        
+        Args:
+            features_df: DataFrame with features for prediction
+            enforce_symmetry: If True, enforce symmetry by averaging with swapped prediction
         
         Returns:
             Dictionary with model names as keys and probability of player1 winning as values.
@@ -126,6 +130,31 @@ class MatchPredictor:
                 else:
                     pred = model.predict(features_df)[0]
                     p1_win_prob = float(pred)
+                
+                # Enforce symmetry: if we predict p1 wins with prob p, 
+                # we should also predict p2 wins with prob (1-p) when features are swapped
+                # To enforce this, we average with the complement
+                if enforce_symmetry:
+                    # Create swapped features (flip all difference features)
+                    swapped_features = features_df.copy()
+                    diff_features = ["elo_diff", "surface_elo_diff", "age_diff", "height_diff", 
+                                    "recent_win_rate_diff", "h2h_winrate_diff"]
+                    for feat in diff_features:
+                        if feat in swapped_features.columns:
+                            swapped_features[feat] = -swapped_features[feat]
+                    
+                    # Get prediction for swapped features
+                    if hasattr(model, "predict_proba"):
+                        swapped_proba = model.predict_proba(swapped_features)[0]
+                        p2_win_prob_swapped = float(swapped_proba[1])  # p2 wins in swapped = p1 wins in original
+                    else:
+                        swapped_pred = model.predict(swapped_features)[0]
+                        p2_win_prob_swapped = float(swapped_pred)
+                    
+                    # Enforce symmetry: p1_prob + p2_prob_swapped should = 1
+                    # Average the two predictions to ensure symmetry
+                    p1_win_prob_symmetric = (p1_win_prob + (1.0 - p2_win_prob_swapped)) / 2.0
+                    p1_win_prob = p1_win_prob_symmetric
                 
                 predictions[model_name] = p1_win_prob
             except Exception as e:

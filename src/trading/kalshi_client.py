@@ -244,7 +244,7 @@ class KalshiHttpClient(KalshiBaseClient):
         
         Args:
             event_ticker: Filter by event ticker
-            series_ticker: Filter by series ticker (e.g., "KXATPMATCH", "KXWTAMATCH", "KXUNITEDCUPMATCH")
+            series_ticker: Filter by series ticker (e.g., "KXATPMATCH", "KXUNITEDCUPMATCH") - ATP only
             limit: Maximum number of results (max ~1000)
             status: Filter by market status (e.g., "open", "closed")
             cursor: Pagination cursor from previous response
