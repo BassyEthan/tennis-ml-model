@@ -1841,27 +1841,49 @@ class KalshiMarketAnalyzer:
         
         value = model_prob - kalshi_prob
         
-        # Calculate expected value (handle None odds)
-        yes_odds = kalshi_odds.get("yes_odds")
-        if yes_odds is not None and yes_odds > 0:
-            expected_value = (model_prob * yes_odds) - 1.0
-        else:
-            # If odds are None or invalid, calculate from probability
-            expected_value = (model_prob / kalshi_prob) - 1.0 if kalshi_prob > 0 else 0.0
-        
-        # Determine trade recommendation with explanations
+        # Determine trade recommendation first (needed for EV calculation)
         trade_side = None
         trade_value = None
         reason = []
         
         if value > 0.05:  # Model thinks higher probability than Kalshi
-            trade_side = "yes"  # Buy YES (bet on player1)
+            trade_side = "yes"  # Buy YES (bet on asked player)
             trade_value = value
+        elif value < -0.05:  # Model thinks lower probability than Kalshi
+            trade_side = "no"  # Buy NO (bet against asked player)
+            trade_value = abs(value)
+        
+        # Calculate expected value based on trade side
+        if trade_side == "yes":
+            # Betting YES: win if asked player wins (probability = model_prob)
+            yes_odds = kalshi_odds.get("yes_odds")
+            if yes_odds is not None and yes_odds > 0:
+                expected_value = (model_prob * yes_odds) - 1.0
+            else:
+                # If odds are None or invalid, calculate from probability
+                expected_value = (model_prob / kalshi_prob) - 1.0 if kalshi_prob > 0 else 0.0
+        elif trade_side == "no":
+            # Betting NO: win if asked player loses (probability = 1 - model_prob)
+            no_odds = kalshi_odds.get("no_odds")
+            no_prob = kalshi_odds.get("no_prob", 1.0 - kalshi_prob)
+            if no_odds is not None and no_odds > 0:
+                expected_value = ((1.0 - model_prob) * no_odds) - 1.0
+            else:
+                # If odds are None or invalid, calculate from probability
+                expected_value = ((1.0 - model_prob) / no_prob) - 1.0 if no_prob > 0 else 0.0
+        else:
+            # Not tradable - calculate EV anyway for comparison (using YES side)
+            yes_odds = kalshi_odds.get("yes_odds")
+            if yes_odds is not None and yes_odds > 0:
+                expected_value = (model_prob * yes_odds) - 1.0
+            else:
+                expected_value = (model_prob / kalshi_prob) - 1.0 if kalshi_prob > 0 else 0.0
+        
+        # Add reasons for tradable trades
+        if trade_side == "yes":
             reason.append(f"Model predicts {model_prob:.1%} chance, Kalshi prices at {kalshi_prob:.1%} ({value:.1%} edge)")
             reason.append(f"Expected value: {expected_value:.1%}")
-        elif value < -0.05:  # Model thinks lower probability than Kalshi
-            trade_side = "no"  # Buy NO (bet against player1)
-            trade_value = abs(value)
+        elif trade_side == "no":
             reason.append(f"Model predicts {model_prob:.1%} chance, Kalshi prices at {kalshi_prob:.1%} ({abs(value):.1%} edge)")
             reason.append(f"Expected value: {expected_value:.1%}")
         else:
@@ -1954,6 +1976,21 @@ class KalshiMarketAnalyzer:
             else:
                 # Fallback: if we can't determine, assume trade_side "yes" means player1
                 bet_on_player = db_p1 if trade_side == "yes" else db_p2
+        
+        # REGRESSION GUARDRAIL: Assert trade_value >= 0 before returning tradable trades
+        # This is a hard invariant that must never be violated
+        if trade_side is not None:
+            # trade_value should always be set for tradable trades
+            if trade_value is None:
+                raise ValueError(
+                    f"REGRESSION GUARDRAIL FAILED: trade_value is None for tradable trade. "
+                    f"trade_side={trade_side}, model_prob={model_prob:.6f}, kalshi_prob={kalshi_prob:.6f}"
+                )
+            assert trade_value >= 0, (
+                f"REGRESSION GUARDRAIL FAILED: trade_value must be >= 0, got {trade_value:.6f}. "
+                f"trade_side={trade_side}, model_prob={model_prob:.6f}, kalshi_prob={kalshi_prob:.6f}. "
+                f"This indicates a critical bug in the pipeline."
+            )
         
         return {
             "market": market,
@@ -2130,7 +2167,8 @@ class KalshiMarketAnalyzer:
                     match_groups[event_ticker] = []
                 match_groups[event_ticker].append(analysis)
         
-        # For each match, determine which player the model favors and only keep that opportunity
+        # For each match, keep the best opportunity (highest EV) across all markets
+        # This evaluates both YES and NO sides and picks the best one
         for event_ticker, match_analyses in match_groups.items():
             if len(match_analyses) < 2:
                 # Only one market for this match, process normally
@@ -2140,81 +2178,28 @@ class KalshiMarketAnalyzer:
                             tradable.append(analysis)
                 continue
             
-            # Multiple markets for the same match - determine which player the model favors
-            # Get raw model probabilities from first analysis (they should be the same for all markets in the same match)
-            raw_p1_prob = None
-            raw_p2_prob = None
-            matched_players = None
+            # Multiple markets for the same match - keep the one with best EV
+            # This ensures we consider both YES and NO trades
+            best_analysis = None
+            best_ev = -float('inf')
             
             for analysis in match_analyses:
-                raw_p1_prob = analysis.get("raw_model_probability_p1")
-                raw_p2_prob = analysis.get("raw_model_probability_p2")
-                matched_players = analysis.get("matched_players")
-                if raw_p1_prob is not None and raw_p2_prob is not None:
-                    break  # Got the probabilities, exit loop
+                if not analysis.get("tradable", False):
+                    continue
+                
+                # Check thresholds
+                trade_value = analysis.get("trade_value", 0)
+                ev = analysis.get("expected_value", 0)
+                
+                if trade_value >= min_value and ev >= min_ev:
+                    if ev > best_ev:
+                        best_ev = ev
+                        best_analysis = analysis
             
-            # Determine which player the model predicts will win
-            if raw_p1_prob is not None and raw_p2_prob is not None:
-                model_favors_p1 = raw_p1_prob > raw_p2_prob
-                favored_player_idx = 0 if model_favors_p1 else 1
-                favored_player_name = matched_players[favored_player_idx] if matched_players else None
-                
-                if debug and favored_player_name:
-                    print(f"\n  Match {event_ticker}: Model favors {favored_player_name} ({max(raw_p1_prob, raw_p2_prob):.1%} vs {min(raw_p1_prob, raw_p2_prob):.1%})")
-                
-                # Find the analysis for the favored player's market
-                # We need to identify which market is asking about the favored player
-                # Use the matched_players tuple to determine player order
-                favored_market_analysis = None
-                best_edge = -1
-                
-                for analysis in match_analyses:
-                    matched_players_analysis = analysis.get("matched_players", ())
-                    if not matched_players_analysis or len(matched_players_analysis) < 2:
-                        continue
-                    
-                    # Get the player names from this analysis
-                    p1_name = matched_players_analysis[0]
-                    p2_name = matched_players_analysis[1]
-                    
-                    # Determine which player this market is asking about
-                    # The model_prob tells us: if it's close to raw_p1_prob, it's asking about p1
-                    # If it's close to raw_p2_prob, it's asking about p2
-                    model_prob = analysis.get("model_probability")
-                    kalshi_prob = analysis.get("kalshi_probability", 0)
-                    
-                    if model_prob is None or kalshi_prob is None:
-                        continue
-                    
-                    # Determine which player this market is asking about by comparing model_prob to raw probabilities
-                    # Use a larger tolerance (0.10 = 10%) to account for rounding differences
-                    is_p1_market = abs(model_prob - raw_p1_prob) < abs(model_prob - raw_p2_prob)
-                    
-                    # This market is for the favored player if:
-                    # - Model favors p1 and this is a p1 market, OR
-                    # - Model favors p2 and this is a p2 market (which means it's NOT a p1 market)
-                    is_favored_player_market = (model_favors_p1 and is_p1_market) or (not model_favors_p1 and not is_p1_market)
-                    
-                    if is_favored_player_market:
-                        # Calculate edge (model_prob - kalshi_prob)
-                        edge = model_prob - kalshi_prob
-                        
-                        # Only consider if edge > 2% (0.02)
-                        if edge > 0.02:
-                            if edge > best_edge:
-                                best_edge = edge
-                                favored_market_analysis = analysis
-                
-                # Only add the favored player's opportunity (if found and edge > 2%)
-                if favored_market_analysis and favored_market_analysis.get("tradable"):
-                    if favored_market_analysis.get("expected_value", 0) >= min_ev:
-                        tradable.append(favored_market_analysis)
-            else:
-                # Couldn't determine favored player, process all normally (fallback)
-                for analysis in match_analyses:
-                    if analysis.get("tradable") and analysis.get("trade_value", 0) >= min_value:
-                        if analysis.get("expected_value", 0) >= min_ev:
-                            tradable.append(analysis)
+            # Add the best opportunity (if found)
+            if best_analysis:
+                tradable.append(best_analysis)
+                # Removed debug print statement - these messages appear after SCAN COMPLETE and clutter the logs
         
         if debug:
             print(f"   Tradable opportunities: {len(tradable)} (after grouping by match)")

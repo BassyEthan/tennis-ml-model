@@ -923,7 +923,9 @@
                     let html = '';
                     data.opportunities.forEach((opp, index) => {
                         const volumeStr = opp.market_volume ? `$${opp.market_volume.toLocaleString()}` : 'Unknown';
-                        const valueClass = opp.value >= 0 ? 'positive' : 'negative';
+                        // Use trade_value (already absolute) or abs(value) - always positive for display
+                        const edgeValue = opp.trade_value !== undefined ? opp.trade_value : Math.abs(opp.value || 0);
+                        const valueClass = 'positive'; // Always positive now
                         const evClass = opp.expected_value >= 0 ? 'positive' : 'negative';
                         const p1ModelProb = opp.model_probability_p1.toFixed(1);
                         const p1KalshiProb = opp.kalshi_probability.toFixed(1);
@@ -974,7 +976,7 @@
                                 <div class="opportunity-metrics">
                                     <div class="opportunity-metric">
                                         <div class="opportunity-metric-label">Value Edge</div>
-                                        <div class="opportunity-metric-value ${valueClass}">${opp.value >= 0 ? '+' : ''}${opp.value.toFixed(1)}%</div>
+                                        <div class="opportunity-metric-value ${valueClass}">${edgeValue.toFixed(1)}%</div>
                                     </div>
                                     <div class="opportunity-metric">
                                         <div class="opportunity-metric-label">Expected Value</div>
@@ -1013,7 +1015,7 @@
                                         🎯 <strong>BET ON:</strong> ${betOnPlayer} @ ${yesPrice.toFixed(1)}¢
                                 </div>
                                     <div class="opportunity-recommendation-details">
-                                        Trade Value: ${opp.trade_value.toFixed(1)}% | Edge: ${opp.value >= 0 ? '+' : ''}${opp.value.toFixed(1)}%
+                                        Trade Value: ${opp.trade_value.toFixed(1)}% | Edge: ${edgeValue.toFixed(1)}%
                             </div>
                                 </div>
                                 
@@ -1120,8 +1122,12 @@
             }
             
             // INCLUDE Individual tradable opportunity details (from auto_trader logger.info)
-            // Lines like "[1/4] Will Michael Mmoh..."
+            // Lines like "[1/5] Will Michael Mmoh..." from TRADABLE OPPORTUNITIES section
+            // EXCLUDE lines from TRADING PHASE section which have "[X/Y]" where Y > 5 (or Y != 5)
+            // We can't easily distinguish by denominator, so we'll rely on excluding the TRADING PHASE section header first
             if (msg.includes(']') && msg.includes('/') && msg.includes('will')) {
+                // Only include if it's from the TRADABLE OPPORTUNITIES section
+                // (we exclude TRADING PHASE section separately below)
                 return true;
             }
             // Opportunity details: probabilities, odds, bet recommendation
@@ -1134,7 +1140,11 @@
             if (msg.includes('🎯') || msg.includes('bet on:')) {
                 return true;
             }
-            if (msg.includes('edge:') && msg.includes('ev:')) {
+            if (msg.includes('edge:') || msg.includes('ev:')) {
+                return true;
+            }
+            // Also match "Edge:" and "EV:" (capitalized)
+            if ((msg.includes('edge:') || msg.includes('Edge:')) && (msg.includes('ev:') || msg.includes('EV:'))) {
                 return true;
             }
             
@@ -1143,22 +1153,33 @@
                 return true;
             }
             
-            // INCLUDE TRADING PHASE section: Which trades are placed and why (has 🔨 emoji)
-            if (msg.includes('🔨') || msg.includes('trading phase')) {
-                return true;
+            // EXCLUDE TRADING PHASE section (we only show tradable opportunities, not execution phase)
+            if (msg.includes('🔨') || (msg.includes('trading phase') && !msg.includes('tradable opportunities'))) {
+                return false;
             }
             
-            // INCLUDE Trade execution results
-            if (msg.includes('✅') && (msg.includes('trade placed') || msg.includes('scan complete'))) {
-                return true;
+            // EXCLUDE individual trade execution details from TRADING PHASE
+            // We only want to show the tradable opportunities list, not the execution attempts
+            if (msg.includes('trade placed') && !msg.includes('scan complete')) {
+                return false;
             }
-            if (msg.includes('❌') && msg.includes('trade failed')) {
-                return true;
+            if (msg.includes('trade failed')) {
+                return false;
             }
             if (msg.includes('no bids available')) {
-                return true; // Explains why trade failed
+                return false;
             }
-            if (msg.includes('scan complete') || msg.includes('trades placed:')) {
+            
+            // EXCLUDE debug messages about match selection (from grouping logic)
+            if (msg.includes('selected') && (msg.includes('trade') || msg.includes('yes') || msg.includes('no'))) {
+                return false;
+            }
+            
+            // INCLUDE scan complete summary
+            if (msg.includes('✅') && msg.includes('scan complete')) {
+                return true;
+            }
+            if (msg.includes('scan complete') && msg.includes('trades placed:')) {
                 return true;
             }
             
@@ -1174,13 +1195,38 @@
         
         function filterAndDisplayLogs() {
             const logContainer = document.getElementById('tradingLog');
-            const filtered = allLogs.filter(log => {
-                if (currentView === 'tradingPhase') {
+            
+            let filtered = [];
+            if (currentView === 'tradingPhase') {
+                // For Trading Phase view, filter logs and track state to exclude TRADING PHASE section
+                let inTradingPhaseSection = false;
+                filtered = allLogs.filter(log => {
+                    const msg = log.message.toLowerCase();
+                    
+                    // Track when we enter/exit TRADING PHASE section
+                    if (msg.includes('🔨') || (msg.includes('trading phase') && !msg.includes('tradable opportunities'))) {
+                        inTradingPhaseSection = true;
+                        return false; // Exclude the marker itself
+                    }
+                    
+                    // Exit TRADING PHASE section when we see SCAN COMPLETE
+                    if (inTradingPhaseSection && (msg.includes('✅') && msg.includes('scan complete'))) {
+                        inTradingPhaseSection = false;
+                        return true; // Include SCAN COMPLETE
+                    }
+                    
+                    // Exclude all logs while in TRADING PHASE section
+                    if (inTradingPhaseSection) {
+                        return false;
+                    }
+                    
+                    // Apply normal filter for logs outside TRADING PHASE section
                     return isTradingPhaseLog(log.message, log.type);
-                } else {
-                    return isImportantLog(log.message, log.type);
-                }
-            });
+                });
+            } else {
+                // Logs view: show everything
+                filtered = allLogs.filter(log => isImportantLog(log.message, log.type));
+            }
             
             logContainer.innerHTML = '';
             if (filtered.length === 0) {

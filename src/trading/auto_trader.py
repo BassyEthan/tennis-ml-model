@@ -460,20 +460,28 @@ class AutoTrader:
                 min_volume=self.min_volume,
             )
             
+            # Sort tradable by market volume (descending) - same as opportunities endpoint
+            tradable.sort(key=lambda x: x.get("market_volume") or 0, reverse=True)
+            
+            # Limit to top 5 opportunities (matching opportunities endpoint default)
+            # This ensures live trading matches what's shown in Top Trading Opportunities
+            top_tradable = tradable[:5]
+            
             # Log summary
             logger.info(f"\n{'=' * 70}")
             logger.info(f"📊 SCAN SUMMARY")
             logger.info(f"{'=' * 70}")
             logger.info(f"   Markets analyzed: {len(all_analyses)}")
             logger.info(f"   Tradable opportunities: {len(tradable)}")
+            logger.info(f"   Top opportunities (by volume): {len(top_tradable)}")
             logger.info(f"   Rejected: {len(all_analyses) - len(tradable)}")
             
-            # Log details for each TRADABLE market only (not all_analyses)
-            if tradable:
+            # Log details for TOP TRADABLE markets only (matching opportunities endpoint)
+            if top_tradable:
                 logger.info(f"\n{'=' * 70}")
-                logger.info(f"💰 TRADABLE OPPORTUNITIES ({len(tradable)})")
+                logger.info(f"💰 TRADABLE OPPORTUNITIES ({len(top_tradable)})")
                 logger.info(f"{'=' * 70}")
-                for i, analysis in enumerate(tradable, 1):
+                for i, analysis in enumerate(top_tradable, 1):
                     ticker = analysis.get("ticker", "Unknown")
                     title = analysis.get("title", "Unknown Market")
                     players = analysis.get("matched_players", ("", ""))
@@ -481,6 +489,7 @@ class AutoTrader:
                     
                     is_tradable = analysis.get("tradable", False)
                     value = analysis.get("value", 0)
+                    trade_value = analysis.get("trade_value", abs(value))  # Use trade_value if available, otherwise abs(value)
                     ev = analysis.get("expected_value", 0)
                     reason = analysis.get("reason", "")
                     market_volume = analysis.get("market_volume", 0)
@@ -629,10 +638,12 @@ class AutoTrader:
                         yes_price = kalshi_odds.get('yes_price', 0) if kalshi_odds else 0
                         no_price = kalshi_odds.get('no_price', 0) if kalshi_odds else 0
                         
-                        logger.info(f"\n   [{i}/{len(tradable)}] {title}")
+                        logger.info(f"\n   [{i}/{len(top_tradable)}] {title}")
                         logger.info(f"      Match: {players_str}")
                         volume_str = f"${market_volume:,.0f}" if market_volume is not None else "N/A"
-                        logger.info(f"      Edge: {value:+.1%} | EV: {ev:+.1%} | Volume: {volume_str}{time_info}")
+                        # Use trade_value (already absolute) or abs(value) for display
+                        edge_display = analysis.get("trade_value", abs(value))
+                        logger.info(f"      Edge: {edge_display:.1%} | EV: {ev:+.1%} | Volume: {volume_str}{time_info}")
                         logger.info(f"      Model Probability: {model_prob:.1%} | Kalshi Probability: {kalshi_prob:.1%}")
                         if yes_price and no_price:
                             logger.info(f"      Kalshi Odds: YES @ {yes_price:.1f}¢ | NO @ {no_price:.1f}¢")
@@ -643,7 +654,8 @@ class AutoTrader:
                         logger.info(f"      Ticker: {ticker}")
                         logger.info(f"      Players: {players_str}")
                         if value or ev:
-                            logger.info(f"      Value Edge: {value:.1%} | Expected Value: {ev:.1%}")
+                            edge_display = analysis.get("trade_value", abs(value))
+                            logger.info(f"      Value Edge: {edge_display:.1%} | Expected Value: {ev:.1%}")
                         if market_volume:
                             logger.info(f"      Market Volume: ${market_volume:,.0f}{time_info}")
                         elif market_volume is None:
@@ -659,28 +671,26 @@ class AutoTrader:
                         else:
                             logger.info(f"      Reason: Unknown (check logs for details)")
             
-            if not tradable:
+            if not top_tradable:
                 logger.info(f"\n{'=' * 70}")
                 logger.info("⚠️  NO TRADABLE OPPORTUNITIES FOUND")
                 logger.info(f"{'=' * 70}")
                 return []
             
-            # Sort by value (highest first)
-            tradable.sort(key=lambda x: x.get("value", 0), reverse=True)
-            
-            # Place trades for top opportunities
+            # Place trades for top opportunities (matching opportunities endpoint)
             logger.info(f"\n{'=' * 70}")
-            logger.info(f"🔨 TRADING PHASE ({len(tradable)} opportunities)")
+            logger.info(f"🔨 TRADING PHASE ({len(top_tradable)} opportunities)")
             logger.info(f"{'=' * 70}")
             
             trades_placed = []
-            for i, opp in enumerate(tradable, 1):
+            for i, opp in enumerate(top_tradable, 1):
                 value = opp.get("value", 0)
+                trade_value = opp.get("trade_value", abs(value))  # Use trade_value (already absolute) if available
                 ev = opp.get("expected_value", 0)
                 ticker = opp.get("ticker", "Unknown")
                 title = opp.get("title", "Unknown")
                 
-                if value >= self.min_value_threshold and ev >= self.min_ev_threshold:
+                if trade_value >= self.min_value_threshold and ev >= self.min_ev_threshold:
                     # Determine which player we're betting on
                     bet_on_player = opp.get('bet_on_player')
                     if not bet_on_player:
@@ -697,11 +707,11 @@ class AutoTrader:
                     yes_price = kalshi_odds.get('yes_price', 0) if kalshi_odds else 0
                     no_price = kalshi_odds.get('no_price', 0) if kalshi_odds else 0
                     
-                    logger.info(f"\n   [{i}/{len(tradable)}] {title}")
+                    logger.info(f"\n   [{i}/{len(top_tradable)}] {title}")
                     logger.info(f"      Model Probability: {model_prob:.1%} | Kalshi Probability: {kalshi_prob:.1%}")
                     if yes_price and no_price:
                         logger.info(f"      Kalshi Odds: YES @ {yes_price:.1f}¢ | NO @ {no_price:.1f}¢")
-                    logger.info(f"      🎯 BET ON: {bet_on_player} @ {yes_price:.1f}¢ | Edge: {value:+.1%} | EV: {ev:+.1%}")
+                    logger.info(f"      🎯 BET ON: {bet_on_player} @ {yes_price:.1f}¢ | Edge: {trade_value:.1%} | EV: {ev:+.1%}")
                     trade_result = self.place_trade(opp)
                     if trade_result:
                         trades_placed.append(trade_result)
@@ -709,10 +719,10 @@ class AutoTrader:
                     else:
                         logger.warning(f"      ❌ TRADE FAILED")
                 else:
-                    logger.debug(f"   [{i}/{len(tradable)}] Skipping {ticker} (below thresholds)")
+                    logger.debug(f"   [{i}/{len(top_tradable)}] Skipping {ticker} (below thresholds)")
             
             logger.info(f"\n{'=' * 70}")
-            logger.info(f"✅ SCAN COMPLETE | Trades placed: {len(trades_placed)}/{len(tradable)}")
+            logger.info(f"✅ SCAN COMPLETE | Trades placed: {len(trades_placed)}/{len(top_tradable)}")
             logger.info(f"{'=' * 70}")
             return trades_placed
             

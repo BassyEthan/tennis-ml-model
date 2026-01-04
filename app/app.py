@@ -58,14 +58,15 @@ def initialize_services():
             print("✅ Kalshi analyzer initialized")
             
             # Initialize auto trader (only if Kalshi is available)
+            # Use same thresholds as /api/opportunities for consistency
             print("Initializing auto trader...")
             auto_trader = AutoTrader(
                 kalshi_client=kalshi_client,
                 analyzer=kalshi_analyzer,
-                min_value_threshold=0.02,  # 2% edge
-                min_ev_threshold=0.05,     # 5% EV
-                max_hours_ahead=336,       # 14 days
-                min_volume=5000            # $5k minimum
+                min_value_threshold=0.05,  # 5% edge (same as opportunities endpoint)
+                min_ev_threshold=0.10,     # 10% EV (same as opportunities endpoint)
+                max_hours_ahead=48,        # 2 days (same as opportunities endpoint)
+                min_volume=0               # No minimum (same as opportunities endpoint default)
             )
             print("✅ Auto trader initialized")
         except Exception as e:
