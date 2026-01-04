@@ -10,7 +10,7 @@ from pathlib import Path
 FEATURES = [
     "elo_diff", "surface_elo_diff", "age_diff", "height_diff",
     "recent_win_rate_diff", "h2h_winrate_diff",
-    "is_clay", "is_grass", "is_hard", "best_of_5",
+    "is_clay", "is_grass", "is_hard", "is_indoor", "best_of_5",
     "round_code", "tourney_level_code"
 ]
 
@@ -84,6 +84,9 @@ class MatchPredictor:
         is_grass = 1 if surface == "Grass" else 0
         is_hard = 1 if surface == "Hard" else 0
         
+        # Indoor encoding (default to 0/outdoor if not specified)
+        is_indoor = 0  # Default to outdoor
+        
         features = {
             "elo_diff": elo_diff,
             "surface_elo_diff": surface_elo_diff,
@@ -94,6 +97,7 @@ class MatchPredictor:
             "is_clay": is_clay,
             "is_grass": is_grass,
             "is_hard": is_hard,
+            "is_indoor": is_indoor,
             "best_of_5": 1 if best_of_5 else 0,
             "round_code": round_code,
             "tourney_level_code": tourney_level_code

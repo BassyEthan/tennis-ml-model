@@ -1,5 +1,6 @@
 
 import pandas as pd
+import numpy as np
 from sklearn.model_selection import train_test_split
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
@@ -15,22 +16,92 @@ console = Console()
 from joblib import dump
 FEATURES = ["elo_diff","surface_elo_diff","age_diff","height_diff","recent_win_rate_diff",
             "h2h_winrate_diff",
-            "is_clay","is_grass","is_hard","best_of_5","round_code","tourney_level_code"]
+            "is_clay","is_grass","is_hard","is_indoor","best_of_5","round_code","tourney_level_code"]
 TARGET = "p1_wins"
 NUMERIC = FEATURES
 TEST_SIZE = 0.2
 RANDOM_STATE = 42
 
-def load_data(csv_path: str):
+def load_data(csv_path: str, reference_date=None):
+    """
+    Load data and calculate temporal weights.
+    
+    Args:
+        csv_path: Path to processed matches CSV
+        reference_date: Reference date for weighting (YYYYMMDD format). 
+                       If None, uses max date in dataset.
+    
+    Returns:
+        X (features), y (target), sample_weights
+    """
     df = pd.read_csv(csv_path)
-    return df[FEATURES], df[TARGET].astype(int)
+    
+    # Calculate temporal weights based on match date
+    if "tourney_date" in df.columns:
+        # Convert dates to datetime
+        df["date"] = pd.to_datetime(df["tourney_date"], format="%Y%m%d", errors="coerce")
+        
+        # Use max date as reference if not provided
+        if reference_date is None:
+            reference_date = df["date"].max()
+        else:
+            reference_date = pd.to_datetime(str(reference_date), format="%Y%m%d")
+        
+        # Calculate days since match (older = more days)
+        df["days_ago"] = (reference_date - df["date"]).dt.days
+        df["days_ago"] = df["days_ago"].fillna(365)  # Default to 1 year ago if date invalid
+        
+        # Exponential decay weighting: weight = exp(-decay * days_ago / 365)
+        # This gives:
+        # - Recent matches (0-30 days): weight ~1.0
+        # - 6 months ago: weight ~0.5
+        # - 1 year ago: weight ~0.25
+        # - 2 years ago: weight ~0.06
+        decay_rate = 0.693  # ln(2) so 1 year = 0.5 weight
+        df["sample_weight"] = np.exp(-decay_rate * df["days_ago"] / 365.0)
+        
+        # Normalize weights so they average to 1.0 (helps with model stability)
+        df["sample_weight"] = df["sample_weight"] / df["sample_weight"].mean()
+        
+        sample_weights = df["sample_weight"].values
+    else:
+        # No date column, use uniform weights
+        sample_weights = np.ones(len(df))
+    
+    return df[FEATURES], df[TARGET].astype(int), sample_weights
 
 def make_preprocessor():
     numeric = Pipeline([("impute", SimpleImputer(strategy="median")),("scale", StandardScaler())])
     return ColumnTransformer([("num", numeric, NUMERIC)])
 
-def split(X,y):
-    return train_test_split(X,y,test_size=TEST_SIZE,random_state=RANDOM_STATE,stratify=y)
+def split(X, y, sample_weights=None):
+    """
+    Split data into train/test sets.
+    
+    Args:
+        X: Features
+        y: Target
+        sample_weights: Optional sample weights
+    
+    Returns:
+        X_train, X_test, y_train, y_test, (w_train, w_test) if weights provided
+    """
+    if sample_weights is not None:
+        result = train_test_split(
+            X, y, sample_weights,
+            test_size=TEST_SIZE,
+            random_state=RANDOM_STATE,
+            stratify=y
+        )
+        return result[0], result[1], result[2], result[3], result[4], result[5]
+    else:
+        result = train_test_split(
+            X, y,
+            test_size=TEST_SIZE,
+            random_state=RANDOM_STATE,
+            stratify=y
+        )
+        return result[0], result[1], result[2], result[3]
 
 def evaluate(model, X_test, y_test):
     y_pred = model.predict(X_test)

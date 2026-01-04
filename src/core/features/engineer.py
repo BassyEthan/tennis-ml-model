@@ -20,6 +20,9 @@ def build_match_dataset(df_matches: pd.DataFrame) -> pd.DataFrame:
         "round", "best_of", "winner_id", "winner_name", "winner_age", "winner_ht",
         "loser_id", "loser_name", "loser_age", "loser_ht"
     ]
+    # Add indoor column if it exists
+    if "indoor" in df_matches.columns:
+        keep.append("indoor")
     df = df_matches[keep].copy()
     df["surface"] = df["surface"].map(_normalize_surface)
     df["best_of_5"] = (df["best_of"] == 5).astype(int)
@@ -49,7 +52,8 @@ def build_match_dataset(df_matches: pd.DataFrame) -> pd.DataFrame:
 
     for _, row in df.iterrows():
         s = row["surface"]
-        w = int(row["winner_id"]); l = int(row["loser_id"])
+        # Handle both string and integer IDs
+        w = str(row["winner_id"]); l = str(row["loser_id"])
 
         # Get ELO values
         w_elo = elo.get(w); l_elo = elo.get(l)
@@ -113,6 +117,16 @@ def build_match_dataset(df_matches: pd.DataFrame) -> pd.DataFrame:
     df["is_clay"] = (df["surface"] == "Clay").astype(int)
     df["is_grass"] = (df["surface"] == "Grass").astype(int)
     df["is_hard"] = (df["surface"] == "Hard").astype(int)
+    
+    # Indoor feature (if available)
+    if "indoor" in df.columns:
+        # Convert indoor column: "O" = outdoor (0), "I" = indoor (1), or boolean
+        df["is_indoor"] = df["indoor"].apply(
+            lambda x: 1 if (str(x).upper() == "I" or str(x).upper() == "INDOOR" or x == True or x == 1) 
+            else 0
+        ).astype(int)
+    else:
+        df["is_indoor"] = 0  # Default to outdoor if not available
 
     # Winner rows
     df["p1_wins"] = 1
@@ -121,7 +135,7 @@ def build_match_dataset(df_matches: pd.DataFrame) -> pd.DataFrame:
     final = [
         "p1_id", "p2_id", "p1_wins", "elo_diff", "surface_elo_diff", "age_diff",
         "height_diff", "recent_win_rate_diff", "h2h_winrate_diff",
-        "is_clay", "is_grass", "is_hard", "best_of_5", "round_code",
+        "is_clay", "is_grass", "is_hard", "is_indoor", "best_of_5", "round_code",
         "tourney_level_code", "tourney_id", "tourney_name", "tourney_date",
         "surface", "round"
     ]

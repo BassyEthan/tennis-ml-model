@@ -34,9 +34,12 @@ This document describes the reorganized project structure for the Tennis Trading
 - `predictor.py` - Match prediction service
 
 #### `/src/trading/` - Trading & Betting Logic
-- `odds_fetcher.py` - Fetch betting odds from APIs
-  - `OddsFetcher` - Fetch odds from various providers
-  - `ValueBetCalculator` - Calculate value bets and Kelly Criterion
+- `kalshi_client.py` - Kalshi API client for market data and trading
+  - `KalshiBaseClient` - Base client with authentication
+  - `KalshiHttpClient` - HTTP API methods
+  - `KalshiClient` - Backward-compatible wrapper
+- `kalshi_analyzer.py` - Analyze Kalshi markets for value opportunities
+  - `KalshiMarketAnalyzer` - Market analysis and value calculation
 
 #### `/src/evaluation/` - Model Evaluation
 - `evaluate.py` - Model evaluation utilities
@@ -96,7 +99,7 @@ from src.core.data.ingest import load_matches
 from src.core.features.elo import Elo, SurfaceElo
 from src.api.player_stats import PlayerStatsDB
 from src.api.predictor import MatchPredictor
-from src.trading.odds_fetcher import OddsFetcher, ValueBetCalculator
+from src.trading.kalshi_analyzer import KalshiMarketAnalyzer
 ```
 
 ### From Scripts
@@ -142,7 +145,7 @@ If you have existing code that imports from the old structure:
 from src.data.ingest import load_matches
 from src.features.elo import Elo
 from src.web.player_stats import PlayerStatsDB
-from src.betting.odds_fetcher import OddsFetcher
+from src.trading.kalshi_analyzer import KalshiMarketAnalyzer
 ```
 
 **New imports:**
@@ -150,7 +153,7 @@ from src.betting.odds_fetcher import OddsFetcher
 from src.core.data.ingest import load_matches
 from src.core.features.elo import Elo
 from src.api.player_stats import PlayerStatsDB
-from src.trading.odds_fetcher import OddsFetcher
+from src.trading.kalshi_analyzer import KalshiMarketAnalyzer
 ```
 
 ## Running the System

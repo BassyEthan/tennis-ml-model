@@ -23,7 +23,7 @@ tennis-ml-model/
 │   │   └── predictor.py
 │   ├── trading/           # Trading/betting logic
 │   │   ├── kalshi_client.py
-│   │   └── odds_fetcher.py
+│   │   ├── kalshi_analyzer.py
 │   ├── evaluation/        # Model evaluation
 │   └── simulation/        # Tournament simulation
 │
@@ -150,9 +150,6 @@ KALSHI_ACCESS_KEY=your_kalshi_access_key
 KALSHI_PRIVATE_KEY_PATH=keys/kalshi_private_key.txt
 KALSHI_BASE_URL=https://demo-api.kalshi.co
 
-# Other APIs
-ODDS_API_KEY=your_odds_api_key
-
 # Flask
 FLASK_ENV=development
 PORT=5001
@@ -224,18 +221,6 @@ POST /api/predict
 }
 ```
 
-### Calculate Value Bets
-```
-POST /api/value-bets
-{
-  "player1": "Novak Djokovic",
-  "player2": "Rafael Nadal",
-  "surface": "Hard",
-  "round_code": 7,
-  "tourney_level": "G"
-}
-```
-
 ## Deployment
 
 ### Render.com
@@ -245,7 +230,6 @@ The project is configured for Render.com deployment:
 1. **Procfile** is configured for Gunicorn
 2. **wsgi.py** provides the WSGI entry point
 3. Set environment variables in Render dashboard:
-   - `ODDS_API_KEY` (optional, for real odds)
    - `KALSHI_ACCESS_KEY` (for Kalshi trading)
    - `KALSHI_PRIVATE_KEY_PATH` (path to private key)
    - `FLASK_ENV=production`

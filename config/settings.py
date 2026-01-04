@@ -33,21 +33,27 @@ DEBUG = FLASK_ENV != "production"
 PORT = int(os.environ.get("PORT", 5001))
 HOST = os.environ.get("HOST", "0.0.0.0")
 
-# API Keys
-ODDS_API_KEY = os.environ.get("ODDS_API_KEY")
-ODDS_API_PROVIDER = os.environ.get("ODDS_API_PROVIDER", "oddsapi")
+# API Keys (removed - using Kalshi only)
 
 # Kalshi API Configuration
 KALSHI_ACCESS_KEY = os.environ.get("KALSHI_ACCESS_KEY")
 # Can be either a file path OR the private key content as a string
 KALSHI_PRIVATE_KEY = os.environ.get("KALSHI_PRIVATE_KEY")  # Private key as string
 KALSHI_PRIVATE_KEY_PATH = os.environ.get("KALSHI_PRIVATE_KEY_PATH", str(PROJECT_ROOT / "keys" / "kalshi_private_key.pem"))
-KALSHI_BASE_URL = os.environ.get("KALSHI_BASE_URL", "https://demo-api.kalshi.co")  # Use "https://api.kalshi.com" for production
-KALSHI_USE_PRODUCTION = os.environ.get("KALSHI_USE_PRODUCTION", "false").lower() == "true"
+# Default to production API (set KALSHI_USE_PRODUCTION=false or KALSHI_BASE_URL=https://demo-api.kalshi.co for demo)
+KALSHI_USE_PRODUCTION = os.environ.get("KALSHI_USE_PRODUCTION", "true").lower() == "true"
+KALSHI_BASE_URL = os.environ.get("KALSHI_BASE_URL", None)
 
-# If using production, override base URL
-if KALSHI_USE_PRODUCTION:
-    KALSHI_BASE_URL = "https://api.kalshi.com"
+# Set base URL based on production flag or explicit URL
+if KALSHI_BASE_URL:
+    # Use explicitly set URL
+    pass
+elif KALSHI_USE_PRODUCTION:
+    # Production API - correct URL from Kalshi documentation
+    KALSHI_BASE_URL = "https://api.elections.kalshi.com"
+else:
+    # Demo API
+    KALSHI_BASE_URL = "https://demo-api.kalshi.co"
 
 # Keys directory (for storing private keys securely)
 KEYS_DIR = PROJECT_ROOT / "keys"

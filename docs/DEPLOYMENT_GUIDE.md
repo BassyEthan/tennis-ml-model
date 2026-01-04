@@ -11,7 +11,8 @@
    - Build Command: `pip install -r requirements.txt`
    - Start Command: `gunicorn app.wsgi:application`
    - Environment Variables:
-     - `ODDS_API_KEY` (optional)
+     - `KALSHI_ACCESS_KEY` (for Kalshi trading)
+     - `KALSHI_PRIVATE_KEY_PATH` (path to private key)
      - `FLASK_ENV=production`
 4. **Deploy** - Render handles the rest
 
@@ -30,7 +31,8 @@
 ## Environment Variables
 
 Set these in your deployment platform:
-- `ODDS_API_KEY` - For real betting odds (optional)
+- `KALSHI_ACCESS_KEY` - Kalshi API access key
+- `KALSHI_PRIVATE_KEY_PATH` - Path to Kalshi private key file
 - `FLASK_ENV=production` - Production mode
 - `PORT` - Auto-set by platform
 

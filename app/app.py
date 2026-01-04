@@ -16,7 +16,6 @@ from flask import Flask, render_template, request, jsonify
 from config.settings import PORT, DEBUG, HOST, MODELS_DIR, RAW_DATA_DIR
 from src.api.player_stats import PlayerStatsDB
 from src.api.predictor import MatchPredictor
-from src.trading.odds_fetcher import OddsFetcher, ValueBetCalculator
 
 # Initialize Flask app
 # Set template folder relative to project root
@@ -26,12 +25,11 @@ app = Flask(__name__, template_folder=str(_project_root / 'templates'))
 # Global service instances (initialized on startup)
 player_db = None
 predictor = None
-odds_fetcher = None
 
 
 def initialize_services():
     """Initialize all services on application startup."""
-    global player_db, predictor, odds_fetcher
+    global player_db, predictor
     
     try:
         print("=" * 70)
@@ -43,14 +41,6 @@ def initialize_services():
         
         print("Loading prediction models...")
         predictor = MatchPredictor(models_dir=str(MODELS_DIR))
-        
-        print("Initializing odds fetcher...")
-        api_key = os.environ.get("ODDS_API_KEY")
-        odds_fetcher = OddsFetcher(api_key=api_key)
-        
-        if not api_key:
-            print("⚠️  WARNING: No ODDS_API_KEY found - using mock odds data")
-            print("   Set ODDS_API_KEY environment variable for real betting odds")
         
         print("=" * 70)
         print("✅ System initialized successfully")
@@ -191,141 +181,6 @@ def predict():
     return jsonify(results)
 
 
-@app.route('/api/value-bets', methods=['POST'])
-def calculate_value_bets():
-    """Calculate value bets by comparing model predictions to betting odds."""
-    data = request.get_json()
-    
-    player1_name = data.get('player1', '').strip()
-    player2_name = data.get('player2', '').strip()
-    
-    if not player1_name or not player2_name:
-        return jsonify({"error": "Both player names required"}), 400
-    
-    # Find players
-    p1_id = player_db.find_player(player1_name)
-    p2_id = player_db.find_player(player2_name)
-    
-    if not p1_id or not p2_id:
-        return jsonify({"error": "Players not found"}), 400
-    
-    # Get player statistics
-    p1_stats = player_db.get_player_stats(p1_id)
-    p2_stats = player_db.get_player_stats(p2_id)
-    h2h_diff = player_db.get_h2h(p1_id, p2_id)
-    
-    # Determine match parameters
-    if 'best_of_5' in data and isinstance(data.get('best_of_5'), bool):
-        best_of_5 = data.get('best_of_5')
-    else:
-        best_of_5 = (data.get('tourney_level', 'A') == 'G')
-    
-    # Build features and get predictions
-    features_df = predictor.build_features(
-        p1_stats, p2_stats,
-        surface=data.get('surface', 'Hard'),
-        best_of_5=best_of_5,
-        round_code=int(data.get('round_code', 7)),
-        tourney_level_code=int(data.get('tourney_level_code', 2)),
-        h2h_diff=h2h_diff
-    )
-    
-    predictions = predictor.predict(features_df)
-    
-    # Convert to probabilities for value calculation
-    model_probs = {name: prob for name, prob in predictions.items() if prob is not None}
-    
-    # Fetch odds
-    odds_data = odds_fetcher.find_match_odds(player1_name, player2_name, predictions=model_probs)
-    
-    if not odds_data:
-        return jsonify({"error": "Could not find odds for this match"}), 404
-    
-    # Check if using mock odds
-    is_mock_odds = odds_data.get("is_mock", False) or "Mock" in odds_data.get("note", "")
-    
-    # Calculate value bets
-    value_analysis = ValueBetCalculator.calculate_best_bet(model_probs, odds_data)
-    
-    # Format response
-    model_names = {
-        "random_forest": "Random Forest",
-        "decision_tree": "Decision Tree",
-        "xgboost": "XGBoost"
-    }
-    
-    predictions_display = {}
-    for model_name, prob in predictions.items():
-        if prob is not None:
-            display_name = model_names.get(model_name, model_name.replace("_", " ").title())
-            predictions_display[display_name] = {
-                "player1_win_prob": round(prob * 100, 2),
-                "player2_win_prob": round((1 - prob) * 100, 2)
-            }
-    
-    # Format recommendations
-    recommendations = []
-    for rec in value_analysis["recommendations"]:
-        rec_copy = rec.copy()
-        rec_copy["model"] = model_names.get(rec["model"], rec["model"].replace("_", " ").title())
-        
-        # Map bet_on to full player name
-        if rec["bet_on"].lower() in p1_stats["name"].lower() or p1_stats["name"].lower() in rec["bet_on"].lower():
-            rec_copy["bet_on"] = p1_stats["name"]
-        elif rec["bet_on"].lower() in p2_stats["name"].lower() or p2_stats["name"].lower() in rec["bet_on"].lower():
-            rec_copy["bet_on"] = p2_stats["name"]
-        
-        recommendations.append(rec_copy)
-    
-    # Sort to prioritize Random Forest
-    recommendations.sort(key=lambda x: (x["model"] != "Random Forest", -x["value_percent"]))
-    
-    # Build response
-    response = {
-        "match": {
-            "player1": {
-                "name": p1_stats["name"],
-                "odds": odds_data["player1"]["odds"],
-                "implied_probability": round(odds_data["player1"]["implied_prob"] * 100, 2)
-            },
-            "player2": {
-                "name": p2_stats["name"],
-                "odds": odds_data["player2"]["odds"],
-                "implied_probability": round(odds_data["player2"]["implied_prob"] * 100, 2)
-            },
-            "bookmakers": odds_data["bookmakers"]
-        },
-        "predictions": predictions_display,
-        "value_analysis": {
-            "player1_values": {},
-            "player2_values": {},
-            "recommendations": recommendations,
-            "primary_model": "Random Forest",
-            "is_mock_odds": is_mock_odds,
-            "warning": "⚠️ WARNING: Using simulated/mock odds. For real betting, use actual bookmaker odds from an API. These recommendations are for testing only!" if is_mock_odds else None
-        }
-    }
-    
-    # Add value metrics
-    for model_name, value_data in value_analysis["player1_values"].items():
-        display_name = model_names.get(model_name, model_name)
-        response["value_analysis"]["player1_values"][display_name] = {
-            "value_percent": value_data["value_percent"],
-            "expected_value_percent": value_data["expected_value_percent"],
-            "kelly_percent": value_data["kelly_percent"],
-            "is_value_bet": value_data["is_value_bet"]
-        }
-    
-    for model_name, value_data in value_analysis["player2_values"].items():
-        display_name = model_names.get(model_name, model_name)
-        response["value_analysis"]["player2_values"][display_name] = {
-            "value_percent": value_data["value_percent"],
-            "expected_value_percent": value_data["expected_value_percent"],
-            "kelly_percent": value_data["kelly_percent"],
-            "is_value_bet": value_data["is_value_bet"]
-        }
-    
-    return jsonify(response)
 
 
 if __name__ == '__main__':
