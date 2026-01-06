@@ -147,14 +147,38 @@ def predict():
     level_map = {"F": 1, "C": 1, "A": 2, "M": 3, "G": 4}
     tourney_level_code = level_map.get(tourney_level, 2)
     
-    # Find players
+    # Find players - try multiple methods with better error messages
     p1_id = player_db.find_player(player1_name)
     p2_id = player_db.find_player(player2_name)
     
+    # If not found, provide helpful error with suggestions
     if not p1_id:
-        return jsonify({"error": f"Player '{player1_name}' not found"}), 400
+        # Try to find similar names
+        suggestions = []
+        player1_lower = player1_name.lower().strip()
+        for db_name, player_id in list(player_db.name_to_id.items())[:100]:  # Check first 100 for speed
+            if player1_lower[:3] in db_name or db_name[:3] in player1_lower:
+                actual_name = player_db.id_to_name.get(player_id, db_name)
+                if actual_name not in suggestions:
+                    suggestions.append(actual_name)
+        error_msg = f"Player '{player1_name}' not found"
+        if suggestions:
+            error_msg += f". Did you mean: {', '.join(suggestions[:5])}?"
+        return jsonify({"error": error_msg}), 400
+    
     if not p2_id:
-        return jsonify({"error": f"Player '{player2_name}' not found"}), 400
+        # Try to find similar names
+        suggestions = []
+        player2_lower = player2_name.lower().strip()
+        for db_name, player_id in list(player_db.name_to_id.items())[:100]:  # Check first 100 for speed
+            if player2_lower[:3] in db_name or db_name[:3] in player2_lower:
+                actual_name = player_db.id_to_name.get(player_id, db_name)
+                if actual_name not in suggestions:
+                    suggestions.append(actual_name)
+        error_msg = f"Player '{player2_name}' not found"
+        if suggestions:
+            error_msg += f". Did you mean: {', '.join(suggestions[:5])}?"
+        return jsonify({"error": error_msg}), 400
     if p1_id == p2_id:
         return jsonify({"error": "Players must be different"}), 400
     
@@ -373,9 +397,23 @@ def start_trading():
         
         logs = []
         try:
+            # Set trading mode based on request
+            # Save original dry_run state to restore later
+            original_dry_run = auto_trader.dry_run
+            auto_trader.dry_run = (mode == 'dry-run')
+            
+            # Log the mode (will be captured by stdout capture)
+            if mode == 'live':
+                print(f"🔴 LIVE TRADING MODE: Real trades will be placed on Kalshi (1 contract per trade)")
+            else:
+                print(f"🧪 DRY RUN MODE: Simulating trades (no real orders will be placed)")
+            
             # Run a single trading cycle (scan and trade)
             with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
                 trades_placed = auto_trader.scan_and_trade()
+            
+            # Restore original dry_run state
+            auto_trader.dry_run = original_dry_run
             
             # Get captured logs
             captured_logs = log_capture.logs

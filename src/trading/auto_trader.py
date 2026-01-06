@@ -138,15 +138,22 @@ class AutoTrader:
             opportunity: Opportunity dictionary from analyzer
             
         Returns:
-            Number of contracts to trade
+            Number of contracts to trade (always at least 1 if tradable)
         """
-        value_edge = opportunity.get("value", 0)
+        # Use trade_value which is always positive (abs of value)
+        # This ensures we use the actual edge, not the signed value
+        trade_value = opportunity.get("trade_value", 0)
+        if trade_value == 0:
+            # Fallback to abs(value) if trade_value not set
+            value = opportunity.get("value", 0)
+            trade_value = abs(value)
+        
         expected_value = opportunity.get("expected_value", 0)
         market_volume = opportunity.get("market_volume", 0)
         
-        # Base position size on value edge (more edge = larger position)
-        # Scale from 1 to max_position_size based on value edge
-        if value_edge < self.min_value_threshold:
+        # Base position size on trade_value (more edge = larger position)
+        # Scale from 1 to max_position_size based on trade_value
+        if trade_value < self.min_value_threshold:
             return 0
         
         # Linear scaling: 2% edge = 1 contract, 10% edge = max_position_size
@@ -154,7 +161,7 @@ class AutoTrader:
         if edge_range <= 0:
             edge_range = 0.01
         
-        normalized_edge = (value_edge - self.min_value_threshold) / edge_range
+        normalized_edge = (trade_value - self.min_value_threshold) / edge_range
         normalized_edge = max(0, min(1, normalized_edge))  # Clamp to [0, 1]
         
         position_size = int(1 + normalized_edge * (self.max_position_size - 1))
@@ -260,24 +267,18 @@ class AutoTrader:
                         logger.info(f"  ✅ Using match START time field: {field} = {time_val}")
                         break
                 
-                # Second priority: Only if no start time found, try expiration fields
-                # But these are when the market closes (after match ends), so add warning
+                # If no match start time found, try to estimate from expiration time
+                # Tennis matches typically last 2-3 hours, so match start ≈ expiration - 2.5 hours
                 if not close_time:
-                    for field in ["expected_expiration_time", "expiration_time", "close_time"]:
-                        time_val = market.get(field)
-                        if time_val:
-                            close_time = time_val
-                            time_field_used = field
-                            logger.warning(f"  ⚠️ WARNING: Using {field} (expiration time) instead of match start time - this may be 2-3 hours later than match start!")
-                            break
-                
-                # Last resort: event_close_time (usually tournament end, not match start)
-                if not close_time:
-                    event_close = market.get("event_close_time")
-                    if event_close:
-                        close_time = event_close
-                        time_field_used = "event_close_time"
-                        logger.warning(f"  ⚠️ WARNING: Using event_close_time (last resort) - this is usually tournament end, not match start!")
+                    expiration_time = market.get("expected_expiration_time") or market.get("expiration_time") or market.get("close_time")
+                    if expiration_time:
+                        close_time = expiration_time
+                        time_field_used = "estimated_from_expiration"
+                        logger.warning(f"  ⚠️ No match start time field found. Using expiration time and estimating match start ≈ expiration - 2.5 hours")
+                    else:
+                        logger.error(f"  ❌ REJECTED: No match start time or expiration time found for {ticker}. Cannot determine match time.")
+                        logger.error(f"     Available fields: match_start_time={market.get('match_start_time')}, start_time={market.get('start_time')}, scheduled_time={market.get('scheduled_time')}, expected_start_time={market.get('expected_start_time')}")
+                        return None
                 
                 # DEBUG: Log all time fields to see what Kalshi is actually sending
                 logger.info(f"🔍 DEBUG TIME PARSING for {ticker}:")
@@ -331,14 +332,15 @@ class AutoTrader:
                             close_dt = dt_utc.astimezone(est_tz)
                             logger.info(f"  ✅ Parsed non-ISO as UTC: {dt_utc} -> EST: {close_dt}")
                     
-                    # CRITICAL FIX: Kalshi times appear to be 3 hours ahead of actual match start
-                    # Subtract 3 hours to get the actual match start time
-                    # This accounts for a systematic offset in Kalshi's time data
-                    if close_dt:
-                        close_dt = close_dt - timedelta(hours=3)
-                        logger.info(f"  ✅ Adjusted for 3-hour offset: {close_dt}")
+                    # If we're using an expiration time, estimate match start by subtracting 2.5 hours
+                    # Tennis matches typically last 2-3 hours, so match start ≈ expiration - 2.5 hours
+                    if time_field_used == "estimated_from_expiration":
+                        # Estimate match start time from expiration time
+                        close_dt = close_dt - timedelta(hours=2.5)
+                        logger.info(f"  ✅ Estimated match start from expiration: {close_dt} (expiration - 2.5 hours)")
                     else:
-                        close_dt = None
+                        # Using actual match start time field - use as-is (no adjustment)
+                        logger.info(f"  ✅ Using match start time field ({time_field_used}) - no adjustment needed")
                     
                     if close_dt:
                         # Work entirely in EST for calculations
@@ -347,6 +349,11 @@ class AutoTrader:
                         logger.info(f"  ⏰ Current EST time: {now}")
                         logger.info(f"  ⏰ Match EST time: {close_dt}")
                         logger.info(f"  ⏰ Time difference: {time_diff_minutes:.1f} minutes ({time_diff_minutes/60:.1f} hours)")
+                        
+                        # CRITICAL: Skip matches that have already started (negative time difference)
+                        if time_diff_minutes < 0:
+                            logger.warning(f"🔒 LOCKED OUT: Skipping {ticker}: match already started ({abs(time_diff_minutes):.1f} minutes ago)")
+                            return None
                         
                         # Check minimum: must be at least 10 minutes before (always enforced)
                         if time_diff_minutes < min_minutes_before:
@@ -363,78 +370,181 @@ class AutoTrader:
             logger.warning(f"Skipping {ticker}: position size calculated as 0")
             return None
         
-        # Get current price from orderbook (use bid for buying)
+        # Get current price from orderbook (use ask for buying - we need to buy at the ask price)
         try:
             orderbook = self.client.get_orderbook(ticker)
-            bids = orderbook.get("bids", [])
             
-            if not bids:
-                logger.warning(f"No bids available for {ticker}")
+            # For buying, we need to look at asks (sellers), not bids
+            # The ask price is what sellers are offering at
+            asks = orderbook.get("asks", [])
+            
+            # Fallback: try side-specific ask fields
+            if not asks:
+                if trade_side == "yes":
+                    yes_data = orderbook.get("yes", {})
+                    asks = yes_data.get("asks", []) if isinstance(yes_data, dict) else []
+                elif trade_side == "no":
+                    no_data = orderbook.get("no", {})
+                    asks = no_data.get("asks", []) if isinstance(no_data, dict) else []
+            
+            # Fallback: try direct ask fields
+            if not asks:
+                ask_price = orderbook.get("ask") or orderbook.get("yes_ask") or orderbook.get("no_ask")
+                if ask_price:
+                    best_ask_price = int(ask_price)
+                else:
+                    # Last resort: use price from opportunity data
+                    yes_price = kalshi_odds.get("yes_price", 0)
+                    no_price = kalshi_odds.get("no_price", 0)
+                    if trade_side == "yes" and yes_price:
+                        best_ask_price = int(yes_price)
+                    elif trade_side == "no" and no_price:
+                        best_ask_price = int(no_price)
+                    else:
+                        logger.warning(f"Using YES price from opportunity data: {yes_price} (orderbook had no asks)")
+                        best_ask_price = int(yes_price) if yes_price else None
+            else:
+                # Use best ask price (lowest price someone is willing to sell at)
+                best_ask_price = asks[0].get("price")
+            
+            if not best_ask_price:
+                logger.warning(f"No ask price available for {ticker}")
                 return None
             
-            # Use best bid price (highest price someone is willing to pay)
-            best_bid_price = bids[0].get("price")
-            if not best_bid_price:
-                logger.warning(f"No price in orderbook for {ticker}")
+            # Validate price is in valid range (1-99 cents)
+            if best_ask_price < 1 or best_ask_price > 99:
+                logger.error(f"Invalid price {best_ask_price} for {ticker} (must be 1-99 cents)")
                 return None
+            
+            best_ask_price = int(best_ask_price)  # Ensure integer
         except Exception as e:
             logger.error(f"Error getting orderbook for {ticker}: {e}")
-            return None
+            # Fallback to opportunity data
+            yes_price = kalshi_odds.get("yes_price", 0)
+            no_price = kalshi_odds.get("no_price", 0)
+            if trade_side == "yes" and yes_price:
+                best_ask_price = int(yes_price)
+                logger.info(f"Using YES price from opportunity data: {best_ask_price} (orderbook error)")
+            elif trade_side == "no" and no_price:
+                best_ask_price = int(no_price)
+                logger.info(f"Using NO price from opportunity data: {best_ask_price} (orderbook error)")
+            else:
+                logger.error(f"Cannot determine price for {ticker}: {e}")
+                return None
         
-        # Place order
-        order_data = {
-            "ticker": ticker,
-            "side": trade_side,  # "yes" or "no"
-            "action": "buy",
-            "count": position_size,
-            "price": best_bid_price,  # Limit order at best bid
-        }
-        
-        if self.dry_run:
-            logger.info(f"[DRY RUN] Would place order: {order_data}")
-            logger.info(f"  Opportunity: {opportunity.get('title', 'Unknown')}")
-            logger.info(f"  Value edge: {opportunity.get('value', 0):.2%}")
-            logger.info(f"  Expected value: {opportunity.get('expected_value', 0):.2%}")
-            
-            # Simulate successful order
-            simulated_order = {
-                "order_id": f"dry_run_{ticker}_{int(time.time())}",
-                "status": "resting",
+        # Place order - use yes_price or no_price based on trade_side
+        if trade_side == "yes":
+            order_data = {
                 "ticker": ticker,
                 "side": trade_side,
+                "action": "buy",
                 "count": position_size,
-                "price": best_bid_price,
+                "yes_price": best_ask_price,  # Kalshi requires yes_price for YES orders
             }
+        elif trade_side == "no":
+            order_data = {
+                "ticker": ticker,
+                "side": trade_side,
+                "action": "buy",
+                "count": position_size,
+                "no_price": best_ask_price,  # Kalshi requires no_price for NO orders
+            }
+        else:
+            logger.error(f"Invalid trade_side: {trade_side}")
+            return None
+        
+        # Check dry_run mode
+        if self.dry_run:
+            logger.info(f"🧪 DRY RUN: Would place order: {order_data}")
+            logger.info(f"  Opportunity: {opportunity.get('title', 'Unknown')}")
+            logger.info(f"  Value edge: {opportunity.get('trade_value', opportunity.get('value', 0)):.2%}")
+            logger.info(f"  Expected value: {opportunity.get('expected_value', 0):.2%}")
+            logger.info(f"  ⚠️ DRY RUN: Order NOT placed (simulation only)")
+            # Return a simulated response for dry run
+            # Include opportunity data for display
+            players = opportunity.get('matched_players', ('', ''))
+            bet_on_player = opportunity.get('bet_on_player')
+            if not bet_on_player:
+                if trade_side == 'yes':
+                    bet_on_player = players[0] if players[0] else "Unknown"
+                else:
+                    bet_on_player = players[1] if players[1] else "Unknown"
             
+            # Get model probability for the player we're betting on
+            model_prob = opportunity.get('model_probability', 0)
+            # If betting NO, model prob is for the asked player, so prob for bet_on_player is 1 - model_prob
+            if trade_side == 'no':
+                model_prob_bet = 1.0 - model_prob
+            else:
+                model_prob_bet = model_prob
+            
+            return {
+                "ticker": ticker,
+                "order": {
+                    "ticker": ticker,
+                    "side": trade_side,
+                    "action": "buy",
+                    "count": position_size,
+                    "status": "dry_run_simulated",
+                    "dry_run": True
+                },
+                "dry_run": True,
+                "players": players,
+                "bet_on_player": bet_on_player,
+                "model_probability": model_prob_bet
+            }
+        
+        # LIVE TRADING: Place real order
+        try:
+            logger.info(f"🔴 LIVE TRADING: Placing REAL order on Kalshi: {order_data}")
+            logger.info(f"  Opportunity: {opportunity.get('title', 'Unknown')}")
+            logger.info(f"  Value edge: {opportunity.get('trade_value', opportunity.get('value', 0)):.2%}")
+            logger.info(f"  Expected value: {opportunity.get('expected_value', 0):.2%}")
+            
+            order_response = self.client.place_order(**order_data)
+            
+            logger.info(f"✅ ORDER PLACED SUCCESSFULLY: {order_response}")
             self.traded_markets.add(ticker)
+            
+            # Extract player info for display
+            players = opportunity.get('matched_players', ('', ''))
+            bet_on_player = opportunity.get('bet_on_player')
+            if not bet_on_player:
+                if trade_side == 'yes':
+                    bet_on_player = players[0] if players[0] else "Unknown"
+                else:
+                    bet_on_player = players[1] if players[1] else "Unknown"
+            
+            # Get model probability for the player we're betting on
+            model_prob = opportunity.get('model_probability', 0)
+            # If betting NO, model prob is for the asked player, so prob for bet_on_player is 1 - model_prob
+            if trade_side == 'no':
+                model_prob_bet = 1.0 - model_prob
+            else:
+                model_prob_bet = model_prob
+            
             self.trade_history.append({
                 "timestamp": datetime.now().isoformat(),
                 "ticker": ticker,
                 "opportunity": opportunity,
-                "order": simulated_order,
-                "dry_run": True,
+                "order": order_response,
+                "dry_run": False,
             })
             
-            return simulated_order
-        else:
-            try:
-                logger.info(f"Placing order: {order_data}")
-                order_response = self.client.place_order(**order_data)
-                
-                logger.info(f"Order placed successfully: {order_response}")
-                self.traded_markets.add(ticker)
-                self.trade_history.append({
-                    "timestamp": datetime.now().isoformat(),
-                    "ticker": ticker,
-                    "opportunity": opportunity,
-                    "order": order_response,
-                    "dry_run": False,
-                })
-                
-                return order_response
-            except Exception as e:
-                logger.error(f"Error placing order for {ticker}: {e}")
-                return None
+            # Return trade result with ticker and player info for logging
+            return {
+                "ticker": ticker,
+                "order": order_response,
+                "dry_run": False,
+                "players": players,
+                "bet_on_player": bet_on_player,
+                "model_probability": model_prob_bet
+            }
+        except Exception as e:
+            logger.error(f"❌ Error placing order for {ticker}: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return None
     
     def scan_and_trade(self) -> List[Dict[str, Any]]:
         """
@@ -523,24 +633,12 @@ class AutoTrader:
                                     time_field_used = field
                                     break
                             
-                            # Second priority: Only if no start time found, try expiration fields
-                            # But these are when the market closes (after match ends), so add warning
+                            # CRITICAL: DO NOT use expiration/close times - they are when the market closes, not when the match starts
+                            # If we can't find a match start time field, we cannot determine when the match actually starts
+                            # Skip this market to avoid incorrect time calculations
                             if not close_time:
-                                for field in ["expected_expiration_time", "expiration_time", "close_time"]:
-                                    time_val = market.get(field)
-                                    if time_val:
-                                        close_time = time_val
-                                        time_field_used = field
-                                        logger.warning(f"  ⚠️ Using {field} (expiration time) instead of match start time for {ticker} - this may be inaccurate")
-                                        break
-                            
-                            # Last resort: event_close_time (usually tournament end, not match start)
-                            if not close_time:
-                                event_close = market.get("event_close_time")
-                                if event_close:
-                                    close_time = event_close
-                                    time_field_used = "event_close_time"
-                                    logger.warning(f"  ⚠️ Using event_close_time (last resort) for {ticker} - this is usually tournament end, not match start")
+                                logger.warning(f"  ⚠️ Skipping {ticker}: No match start time field found. Cannot determine actual match start time.")
+                                continue
                             
                             if close_time:
                                 # CRITICAL: Kalshi API returns times in UTC (with 'Z' suffix)
@@ -576,11 +674,9 @@ class AutoTrader:
                                         dt_utc = naive_dt.replace(tzinfo=utc_tz)
                                         close_dt = dt_utc.astimezone(est_tz)
                                     
-                                    # CRITICAL FIX: Kalshi times appear to be 3 hours ahead of actual match start
-                                    # Subtract 3 hours to get the actual match start time
-                                    # This accounts for a systematic offset in Kalshi's time data
-                                    if close_dt:
-                                        close_dt = close_dt - timedelta(hours=3)
+                                    # DO NOT subtract 3 hours - match start time fields are already correct
+                                    # The 3-hour subtraction was causing incorrect calculations
+                                    # Use the parsed time as-is since we're using match start time fields
                                 else:
                                     close_dt = None
                                 
@@ -715,14 +811,40 @@ class AutoTrader:
                     trade_result = self.place_trade(opp)
                     if trade_result:
                         trades_placed.append(trade_result)
-                        logger.info(f"      ✅ TRADE PLACED")
+                        # Log detailed trade placement info
+                        if self.dry_run:
+                            logger.info(f"      ✅ TRADE SIMULATED (DRY RUN): {bet_on_player} - {ticker}")
+                        else:
+                            order_id = trade_result.get("order", {}).get("order_id", "Unknown")
+                            order_status = trade_result.get("order", {}).get("status", "Unknown")
+                            logger.info(f"      ✅ TRADE PLACED (LIVE): {bet_on_player} - {ticker}")
+                            logger.info(f"         Order ID: {order_id} | Status: {order_status}")
                     else:
-                        logger.warning(f"      ❌ TRADE FAILED")
+                        logger.warning(f"      ❌ TRADE FAILED: {bet_on_player} - {ticker}")
                 else:
                     logger.debug(f"   [{i}/{len(top_tradable)}] Skipping {ticker} (below thresholds)")
             
             logger.info(f"\n{'=' * 70}")
-            logger.info(f"✅ SCAN COMPLETE | Trades placed: {len(trades_placed)}/{len(top_tradable)}")
+            logger.info(f"✅ SCAN COMPLETE")
+            logger.info(f"   Trades placed: {len(trades_placed)}/{len(top_tradable)}")
+            if trades_placed:
+                logger.info(f"   📋 TRADES EXECUTED:")
+                for i, trade in enumerate(trades_placed, 1):
+                    ticker = trade.get("ticker", "Unknown")
+                    players = trade.get("players", ("", ""))
+                    bet_on_player = trade.get("bet_on_player", "Unknown")
+                    model_prob = trade.get("model_probability", 0)
+                    
+                    # Format player names
+                    player1 = players[0] if len(players) > 0 and players[0] else "Unknown"
+                    player2 = players[1] if len(players) > 1 and players[1] else "Unknown"
+                    match_str = f"{player1} vs {player2}" if player1 != "Unknown" and player2 != "Unknown" else ticker
+                    
+                    is_dry_run = trade.get("dry_run", self.dry_run)
+                    if is_dry_run:
+                        logger.info(f"      {i}. {match_str} | BET ON: {bet_on_player} | Model Win Rate: {model_prob:.1%}")
+                    else:
+                        logger.info(f"      {i}. {match_str} | BET ON: {bet_on_player} | Model Win Rate: {model_prob:.1%}")
             logger.info(f"{'=' * 70}")
             return trades_placed
             

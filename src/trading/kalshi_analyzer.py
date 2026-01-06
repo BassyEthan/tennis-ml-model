@@ -468,18 +468,18 @@ class KalshiMarketAnalyzer:
                             print(f"  Skipped (too far): {market.get('title', 'N/A')} (time: {est_time}, {time_diff:.1f}h away)")
                         continue
                     
-                    # Don't skip markets that are very close (even if slightly in the past)
-                    # Markets might still be tradeable if they're within a few hours
-                    if time_diff < -2:  # More than 2 hours in the past
+                    # CRITICAL: LOCK OUT matches that have already started
+                    # Any match with negative time_diff has already started - skip it immediately
+                    if time_diff < 0:
                         if debug:
                             est_time = format_time_est(market_time)
-                            print(f"  Skipped (too far past): {market.get('title', 'N/A')} (time: {est_time}, {time_diff:.1f}h ago)")
+                            print(f"  🔒 LOCKED OUT (match already started): {market.get('title', 'N/A')} (time: {est_time}, {abs(time_diff):.1f}h ago)")
                         continue
                     
-                    # Log markets that are very close (might be starting soon)
-                    if debug and -1 < time_diff < 3:  # Between 1 hour ago and 3 hours ahead
+                    # Log markets that are starting soon
+                    if debug and 0 <= time_diff < 3:  # Between now and 3 hours ahead
                         est_time = format_time_est(market_time)
-                        print(f"  ⏰ Market starting soon: {market.get('title', 'N/A')} (time: {est_time}, {time_diff:.1f}h {'ago' if time_diff < 0 else 'ahead'})")
+                        print(f"  ⏰ Market starting soon: {market.get('title', 'N/A')} (time: {est_time}, {time_diff:.1f}h ahead)")
                 
                 # NOTE: Volume filtering is now done in scan_markets AFTER aggregation
                 # This ensures we use total match volume, not individual market volume

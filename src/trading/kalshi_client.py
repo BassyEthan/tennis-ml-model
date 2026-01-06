@@ -279,6 +279,8 @@ class KalshiHttpClient(KalshiBaseClient):
         action: str,
         count: int,
         price: Optional[int] = None,
+        yes_price: Optional[int] = None,
+        no_price: Optional[int] = None,
         client_order_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """
@@ -289,7 +291,9 @@ class KalshiHttpClient(KalshiBaseClient):
             side: "yes" or "no"
             action: "buy" or "sell"
             count: Number of contracts
-            price: Price in cents (optional for market orders)
+            price: Price in cents (deprecated - use yes_price or no_price instead)
+            yes_price: Price in cents for YES side (required for YES orders)
+            no_price: Price in cents for NO side (required for NO orders)
             client_order_id: Optional client order ID
         """
         order_data = {
@@ -299,8 +303,17 @@ class KalshiHttpClient(KalshiBaseClient):
             "count": count
         }
         
-        if price is not None:
-            order_data["price"] = price
+        # Kalshi API requires yes_price or no_price, not generic "price"
+        if yes_price is not None:
+            order_data["yes_price"] = yes_price
+        elif no_price is not None:
+            order_data["no_price"] = no_price
+        elif price is not None:
+            # Fallback: if only generic price provided, map to yes_price or no_price based on side
+            if side.lower() == "yes":
+                order_data["yes_price"] = price
+            elif side.lower() == "no":
+                order_data["no_price"] = price
         
         if client_order_id:
             order_data["client_order_id"] = client_order_id

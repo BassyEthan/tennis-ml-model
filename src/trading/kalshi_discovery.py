@@ -519,9 +519,10 @@ def layer5_expiration_window(event: Dict[str, Any], market: Dict[str, Any], max_
             if time_diff_hours > 168:
                 print(f"  ⚠️  DEBUG: Market {market_ticker} using {time_field_used}, time_diff={time_diff_hours:.1f}h (suspicious - might be tournament end)")
         
-        # Must be in the future (with 2 hour grace period for markets that just closed)
-        if time_diff_hours < -2:
-            return "expiration_window_past"
+        # CRITICAL: LOCK OUT matches that have already started
+        # Any match with negative time_diff has already started - reject immediately
+        if time_diff_hours < 0:
+            return f"expiration_window_past_match_already_started_{abs(time_diff_hours):.1f}h_ago"
         
         # CRITICAL: Must be at least min_minutes_before minutes before match start
         # This ensures we place bets BEFORE matches begin, not during

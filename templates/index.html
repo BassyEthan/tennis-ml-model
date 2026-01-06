@@ -744,6 +744,17 @@
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
                         <div class="right-column-title" style="margin-bottom: 0;">Live Automated Trading</div>
                         <div style="display: flex; gap: 12px; align-items: center;">
+                            <!-- Trading Mode Toggle -->
+                            <div style="display: flex; align-items: center; gap: 8px; padding: 8px 16px; background: rgba(31, 41, 55, 0.5); border: 2px solid rgba(75, 85, 99, 0.4); border-radius: 12px;">
+                                <span style="color: #9ca3af; font-size: 0.85em; font-weight: 600;">DRY RUN</span>
+                                <label style="position: relative; display: inline-block; width: 50px; height: 26px; margin: 0;">
+                                    <input type="checkbox" id="tradingModeToggle" style="opacity: 0; width: 0; height: 0;">
+                                    <span style="position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: rgba(75, 85, 99, 0.5); border-radius: 26px; transition: 0.3s;" id="tradingModeSlider">
+                                        <span style="position: absolute; content: ''; height: 20px; width: 20px; left: 3px; bottom: 3px; background-color: white; border-radius: 50%; transition: 0.3s;" id="tradingModeSliderCircle"></span>
+                                    </span>
+                                </label>
+                                <span style="color: #9ca3af; font-size: 0.85em; font-weight: 600;">LIVE</span>
+                            </div>
                             <button id="startTradingBtn" class="start-trading-button" style="padding: 12px 24px; background: linear-gradient(135deg, #6ee7b7 0%, #10b981 100%); border: none; border-radius: 12px; color: #0f172a; font-weight: 700; cursor: pointer; transition: all 0.3s ease; font-size: 0.95em; text-transform: uppercase; letter-spacing: 0.5px;">
                                 ▶ Start Trading (Dry Run)
                             </button>
@@ -755,7 +766,7 @@
                     <!-- View Toggle Buttons -->
                     <div style="display: flex; gap: 8px; margin-bottom: 15px;">
                         <button id="tradingPhaseViewBtn" class="view-toggle-button active" style="padding: 8px 16px; background: rgba(110, 231, 183, 0.2); border: 2px solid rgba(110, 231, 183, 0.4); border-radius: 8px; color: #6ee7b7; font-weight: 600; cursor: pointer; transition: all 0.3s ease; font-size: 0.85em;">
-                            📊 Trading Phase
+                            ✅ Trades Executed
                         </button>
                         <button id="logsViewBtn" class="view-toggle-button" style="padding: 8px 16px; background: rgba(75, 85, 99, 0.2); border: 2px solid rgba(75, 85, 99, 0.4); border-radius: 8px; color: #9ca3af; font-weight: 600; cursor: pointer; transition: all 0.3s ease; font-size: 0.85em;">
                             📋 Logs
@@ -1047,8 +1058,8 @@
         let allLogs = []; // Store all logs for filtering
         
         function isTradingPhaseLog(message, type) {
-            // Trading Phase view: Show tradable opportunities and trade decisions
-            // Should show: how many possible trades (boundaries), which ones chosen, and why
+            // Trades Executed view: Show ONLY trades that were actually executed
+            // Should show: which trades were placed, their order IDs, and status
             const msg = message.toLowerCase();
             
             // EXCLUDE verbose debug messages (print statements from kalshi_analyzer.py)
@@ -1096,86 +1107,20 @@
             if (msg.includes('analyzed:') && msg.includes('failed:')) {
                 return false;
             }
-            // Exclude "No bids available" warnings (they're in TRADING PHASE but too verbose)
-            // Actually, we want these - they explain why trades failed
-            // if (msg.includes('no bids available')) {
-            //     return false;
-            // }
-            
-            // INCLUDE SCAN SUMMARY: How many markets analyzed, how many tradable (boundaries)
-            if (msg.includes('📊') && msg.includes('scan summary')) {
-                return true;
-            }
-            if (msg.includes('markets analyzed:')) {
-                return true;
-            }
-            if (msg.includes('tradable opportunities:') && !msg.includes('(after grouping')) {
-                return true;
-            }
-            if (msg.includes('rejected:')) {
+            // INCLUDE ONLY trade execution results - which trades were actually placed
+            // Show the "TRADES EXECUTED" summary section
+            if (msg.includes('trades executed') || msg.includes('📋')) {
                 return true;
             }
             
-            // INCLUDE TRADABLE OPPORTUNITIES section: Which opportunities meet criteria (has 💰 emoji)
-            if (msg.includes('💰') || (msg.includes('tradable opportunities') && msg.includes('(') && !msg.includes('after grouping'))) {
+            // INCLUDE individual trade results from the summary
+            // Format: "1. Player1 vs Player2 | BET ON: Player | Model Win Rate: XX.X%"
+            // Match lines that start with a number, period, and contain "BET ON" and "Model Win Rate"
+            if (msg.match(/^\s*\d+\.\s+.*bet on:.*model win rate:/i)) {
                 return true;
             }
             
-            // INCLUDE Individual tradable opportunity details (from auto_trader logger.info)
-            // Lines like "[1/5] Will Michael Mmoh..." from TRADABLE OPPORTUNITIES section
-            // EXCLUDE lines from TRADING PHASE section which have "[X/Y]" where Y > 5 (or Y != 5)
-            // We can't easily distinguish by denominator, so we'll rely on excluding the TRADING PHASE section header first
-            if (msg.includes(']') && msg.includes('/') && msg.includes('will')) {
-                // Only include if it's from the TRADABLE OPPORTUNITIES section
-                // (we exclude TRADING PHASE section separately below)
-                return true;
-            }
-            // Opportunity details: probabilities, odds, bet recommendation
-            if (msg.includes('model probability:') || msg.includes('model probability')) {
-                return true;
-            }
-            if (msg.includes('kalshi odds:') || (msg.includes('kalshi probability:') && msg.includes('model probability'))) {
-                return true; // Only include "Kalshi probability:" if it's part of "Model Probability | Kalshi Probability"
-            }
-            if (msg.includes('🎯') || msg.includes('bet on:')) {
-                return true;
-            }
-            if (msg.includes('edge:') || msg.includes('ev:')) {
-                return true;
-            }
-            // Also match "Edge:" and "EV:" (capitalized)
-            if ((msg.includes('edge:') || msg.includes('Edge:')) && (msg.includes('ev:') || msg.includes('EV:'))) {
-                return true;
-            }
-            
-            // INCLUDE NO TRADABLE OPPORTUNITIES message
-            if (msg.includes('no tradable opportunities found') || (msg.includes('⚠️') && msg.includes('no tradable'))) {
-                return true;
-            }
-            
-            // EXCLUDE TRADING PHASE section (we only show tradable opportunities, not execution phase)
-            if (msg.includes('🔨') || (msg.includes('trading phase') && !msg.includes('tradable opportunities'))) {
-                return false;
-            }
-            
-            // EXCLUDE individual trade execution details from TRADING PHASE
-            // We only want to show the tradable opportunities list, not the execution attempts
-            if (msg.includes('trade placed') && !msg.includes('scan complete')) {
-                return false;
-            }
-            if (msg.includes('trade failed')) {
-                return false;
-            }
-            if (msg.includes('no bids available')) {
-                return false;
-            }
-            
-            // EXCLUDE debug messages about match selection (from grouping logic)
-            if (msg.includes('selected') && (msg.includes('trade') || msg.includes('yes') || msg.includes('no'))) {
-                return false;
-            }
-            
-            // INCLUDE scan complete summary
+            // INCLUDE scan complete summary with trade count
             if (msg.includes('✅') && msg.includes('scan complete')) {
                 return true;
             }
@@ -1183,6 +1128,7 @@
                 return true;
             }
             
+            // EXCLUDE everything else - no verbose details (scan summary, tradable opportunities, etc.)
             // Everything else goes to Logs view
             return false;
         }
@@ -1198,29 +1144,8 @@
             
             let filtered = [];
             if (currentView === 'tradingPhase') {
-                // For Trading Phase view, filter logs and track state to exclude TRADING PHASE section
-                let inTradingPhaseSection = false;
+                // For Trading Phase view, show scan summary, tradable opportunities, AND trading phase execution
                 filtered = allLogs.filter(log => {
-                    const msg = log.message.toLowerCase();
-                    
-                    // Track when we enter/exit TRADING PHASE section
-                    if (msg.includes('🔨') || (msg.includes('trading phase') && !msg.includes('tradable opportunities'))) {
-                        inTradingPhaseSection = true;
-                        return false; // Exclude the marker itself
-                    }
-                    
-                    // Exit TRADING PHASE section when we see SCAN COMPLETE
-                    if (inTradingPhaseSection && (msg.includes('✅') && msg.includes('scan complete'))) {
-                        inTradingPhaseSection = false;
-                        return true; // Include SCAN COMPLETE
-                    }
-                    
-                    // Exclude all logs while in TRADING PHASE section
-                    if (inTradingPhaseSection) {
-                        return false;
-                    }
-                    
-                    // Apply normal filter for logs outside TRADING PHASE section
                     return isTradingPhaseLog(log.message, log.type);
                 });
             } else {
@@ -1301,13 +1226,24 @@
             const startBtn = document.getElementById('startTradingBtn');
             const stopBtn = document.getElementById('stopTradingBtn');
             const logContainer = document.getElementById('tradingLog');
+            const modeToggle = document.getElementById('tradingModeToggle');
+            
+            // Get current mode from toggle
+            const isLiveMode = modeToggle ? modeToggle.checked : false;
+            const mode = isLiveMode ? 'live' : 'dry-run';
+            const modeText = isLiveMode ? 'LIVE' : 'DRY RUN';
             
             startBtn.style.display = 'none';
             stopBtn.style.display = 'inline-block';
             logContainer.innerHTML = '';
             allLogs = []; // Reset logs when starting new trading session
             
-            addTradingLog('🚀 Starting automated trading (DRY RUN mode)...', 'info');
+            if (isLiveMode) {
+                addTradingLog('🔴 Starting automated trading (LIVE MODE - REAL TRADES WILL BE PLACED)...', 'warning');
+                addTradingLog('⚠️ WARNING: Real orders will be placed on Kalshi. Each trade will buy 1 contract.', 'warning');
+            } else {
+                addTradingLog('🧪 Starting automated trading (DRY RUN mode - simulation only)...', 'info');
+            }
             addTradingLog('Scanning Kalshi markets for trading opportunities...', 'info');
             
             try {
@@ -1316,7 +1252,7 @@
                     headers: {
                         'Content-Type': 'application/json'
                     },
-                    body: JSON.stringify({ mode: 'dry-run' })
+                    body: JSON.stringify({ mode: mode })
                 });
                 
                 if (!response.ok) {
@@ -1366,9 +1302,51 @@
             addTradingLog('⏹ Trading stopped', 'warning');
         }
         
+        // Update button text based on trading mode toggle
+        function updateTradingButtonText() {
+            const startBtn = document.getElementById('startTradingBtn');
+            const modeToggle = document.getElementById('tradingModeToggle');
+            if (startBtn && modeToggle) {
+                if (modeToggle.checked) {
+                    startBtn.textContent = '▶ Start Trading (LIVE)';
+                    startBtn.style.background = 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)';
+                } else {
+                    startBtn.textContent = '▶ Start Trading (Dry Run)';
+                    startBtn.style.background = 'linear-gradient(135deg, #6ee7b7 0%, #10b981 100%)';
+                }
+            }
+        }
+        
         // Load opportunities when page loads
         document.addEventListener('DOMContentLoaded', () => {
             loadOpportunities();
+            
+            // Trading mode toggle
+            const modeToggle = document.getElementById('tradingModeToggle');
+            if (modeToggle) {
+                // Initialize button text and slider on page load
+                updateTradingButtonText();
+                const slider = document.getElementById('tradingModeSlider');
+                const sliderCircle = document.getElementById('tradingModeSliderCircle');
+                if (!modeToggle.checked) {
+                    slider.style.backgroundColor = 'rgba(75, 85, 99, 0.5)';
+                    sliderCircle.style.transform = 'translateX(0)';
+                }
+                
+                modeToggle.addEventListener('change', function() {
+                    updateTradingButtonText();
+                    // Update slider visual
+                    const slider = document.getElementById('tradingModeSlider');
+                    const sliderCircle = document.getElementById('tradingModeSliderCircle');
+                    if (this.checked) {
+                        slider.style.backgroundColor = 'rgba(239, 68, 68, 0.5)';
+                        sliderCircle.style.transform = 'translateX(24px)';
+                    } else {
+                        slider.style.backgroundColor = 'rgba(75, 85, 99, 0.5)';
+                        sliderCircle.style.transform = 'translateX(0)';
+                    }
+                });
+            }
             
             // Start Trading button
             const startBtn = document.getElementById('startTradingBtn');
