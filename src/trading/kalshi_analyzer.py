@@ -654,7 +654,7 @@ class KalshiMarketAnalyzer:
                     else:
                         continue
                     
-                    # CRITICAL FIX: Kalshi times appear to be 3 hours ahead of actual match start
+                    # CRITICAL: Kalshi times appear to be 3 hours ahead of actual match start
                     # Subtract 3 hours to get the actual match start time
                     # This accounts for a systematic offset in Kalshi's time data
                     dt = dt - timedelta(hours=3)
@@ -1992,7 +1992,7 @@ class KalshiMarketAnalyzer:
                 f"This indicates a critical bug in the pipeline."
             )
         
-        return {
+        result = {
             "market": market,
             "ticker": market.get("ticker"),
             "title": market.get("title"),
@@ -2017,6 +2017,35 @@ class KalshiMarketAnalyzer:
             "tourney_level_code": tourney_level_code,  # Add for debugging
             "market_volume": market_volume  # Add volume for ranking
         }
+        
+        # Parse and add match start time for UI display
+        market_time = self._parse_market_time(market)
+        if market_time:
+            # Format time for display
+            if ZoneInfo:
+                est_tz = ZoneInfo("America/New_York")
+            else:
+                est_tz = timezone(timedelta(hours=-5))
+            
+            # Ensure timezone is EST
+            if market_time.tzinfo is None:
+                if hasattr(est_tz, 'localize'):
+                    market_time = est_tz.localize(market_time)
+                else:
+                    market_time = market_time.replace(tzinfo=est_tz)
+            elif market_time.tzinfo != est_tz:
+                market_time = market_time.astimezone(est_tz)
+            
+            now_est = datetime.now(est_tz)
+            time_diff_minutes = (market_time - now_est).total_seconds() / 60
+            time_diff_hours = time_diff_minutes / 60
+            
+            result["match_start_time"] = market_time.isoformat()
+            result["match_start_time_formatted"] = format_time_est(market_time)
+            result["time_until_match_minutes"] = time_diff_minutes
+            result["time_until_match_hours"] = time_diff_hours
+        
+        return result
     
     def scan_markets(self, limit: int = 500,
                     min_value: float = 0.05,
@@ -2024,7 +2053,8 @@ class KalshiMarketAnalyzer:
                     debug: bool = False,
                     show_all: bool = False,
                     max_hours_ahead: int = 48,
-                    min_volume: int = 0) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+                    min_volume: int = 0,
+                    markets: Optional[List[Dict[str, Any]]] = None) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
         """
         Scan all available tennis markets and identify value opportunities.
         
@@ -2034,13 +2064,89 @@ class KalshiMarketAnalyzer:
             min_ev: Minimum expected value threshold (default 10%)
             debug: Print debug information
             show_all: If True, return all analyzed markets, not just tradable ones
+            max_hours_ahead: Maximum hours ahead to consider markets
+            min_volume: Minimum market volume threshold
+            markets: Optional pre-fetched markets list (from market data service).
+                    If provided, skips fetching from Kalshi API.
             
         Returns:
             Tuple of (tradable_opportunities, all_analyses)
         """
         # NOTE: min_volume filtering is now done AFTER aggregation, so we pass min_volume=0 to fetch_tennis_markets
         # This ensures we use total match volume, not individual market volume
-        markets = self.fetch_tennis_markets(limit=limit, debug=debug, max_hours_ahead=max_hours_ahead, min_volume=0)
+        if markets is not None:
+            # Use provided markets (from market data service) - don't fetch from Kalshi
+            # CRITICAL: Even if markets is empty list [], we use it (don't fall back to Kalshi)
+            if debug:
+                print(f"Using {len(markets)} pre-fetched markets from market data service")
+            if len(markets) == 0:
+                if debug:
+                    print("⚠️  Market data service returned 0 markets - will return empty results (no Kalshi fallback)")
+            
+            # CRITICAL: Filter out matches that have already started (when markets come from service)
+            # This filtering normally happens in fetch_tennis_markets, but we skip that when using service markets
+            # IMPORTANT: Only filter if we can successfully parse a time. If time parsing fails, include the market.
+            filtered_markets = []
+            skipped_started = 0
+            skipped_too_far = 0
+            no_time = 0
+            
+            if ZoneInfo:
+                est_tz = ZoneInfo("America/New_York")
+            else:
+                est_tz = timezone(timedelta(hours=-5))
+            
+            now_est = datetime.now(est_tz)
+            
+            for market in markets:
+                market_time = self._parse_market_time(market)
+                if market_time:
+                    # Ensure timezone is EST
+                    if market_time.tzinfo is None:
+                        if hasattr(est_tz, 'localize'):
+                            market_time = est_tz.localize(market_time)
+                        else:
+                            market_time = market_time.replace(tzinfo=est_tz)
+                    elif market_time.tzinfo != est_tz:
+                        market_time = market_time.astimezone(est_tz)
+                    
+                    time_diff_hours = (market_time - now_est).total_seconds() / 3600
+                    
+                    # CRITICAL: LOCK OUT matches that have already started
+                    # No buffer - if time_diff is negative, match has started
+                    if time_diff_hours < 0:
+                        skipped_started += 1
+                        if debug:
+                            est_time = format_time_est(market_time)
+                            print(f"  🔒 LOCKED OUT (match already started): {market.get('title', 'N/A')} (time: {est_time}, {abs(time_diff_hours):.1f}h ago)")
+                        continue
+                    
+                    # Filter out markets too far in the future
+                    if time_diff_hours > max_hours_ahead:
+                        skipped_too_far += 1
+                        if debug:
+                            est_time = format_time_est(market_time)
+                            print(f"  Skipped (too far): {market.get('title', 'N/A')} (time: {est_time}, {time_diff_hours:.1f}h away)")
+                        continue
+                else:
+                    # Can't parse time - include market anyway (better to show it than filter it out)
+                    no_time += 1
+                    if debug:
+                        print(f"  ⚠️  No time found for market: {market.get('title', 'N/A')} - including anyway")
+                
+                # Market passed timing filter (or no time to check)
+                filtered_markets.append(market)
+            
+            if debug and (skipped_started > 0 or skipped_too_far > 0 or no_time > 0):
+                print(f"  ⚠️  Filtered out {skipped_started} matches (already started), {skipped_too_far} matches (too far ahead), {no_time} markets (no time found - included)")
+            
+            markets = filtered_markets
+        else:
+            # Only fetch from Kalshi if markets parameter was not provided at all
+            # This should NOT happen when called from UI (UI always passes markets from service)
+            if debug:
+                print("⚠️  WARNING: No markets provided, fetching from Kalshi (this should not happen in production)")
+            markets = self.fetch_tennis_markets(limit=limit, debug=debug, max_hours_ahead=max_hours_ahead, min_volume=0)
         
         # Aggregate volumes by event_ticker (markets for the same match)
         # Group markets by event_ticker to sum volumes

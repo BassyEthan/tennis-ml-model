@@ -910,24 +910,30 @@
 
 
         // Load opportunities on page load
-        async function loadOpportunities() {
+        async function loadOpportunities(showLoading = true) {
             const opportunitiesDiv = document.getElementById('opportunities');
             const opportunitiesLoading = document.getElementById('opportunitiesLoading');
             const opportunitiesError = document.getElementById('opportunitiesError');
             const opportunitiesSection = document.getElementById('opportunitiesSection');
             
             try {
-                opportunitiesLoading.style.display = 'block';
-                opportunitiesDiv.style.display = 'none';
+                // Only show loading spinner on initial load, not on auto-refresh
+                if (showLoading) {
+                    opportunitiesLoading.style.display = 'block';
+                    opportunitiesDiv.style.display = 'none';
+                }
                 opportunitiesError.style.display = 'none';
                 
                 const response = await fetch('/api/opportunities?limit=5');
-                const data = await response.json();
                 
                 if (!response.ok) {
-                    throw new Error(data.error || 'Failed to load opportunities');
+                    const errorData = await response.json().catch(() => ({}));
+                    throw new Error(errorData.error || `HTTP ${response.status}: Failed to load opportunities`);
                 }
                 
+                const data = await response.json();
+                
+                // Always hide loading spinner once we have a response
                 opportunitiesLoading.style.display = 'none';
                 
                 if (data.opportunities && data.opportunities.length > 0) {
@@ -951,7 +957,11 @@
                             <div class="opportunity-card">
                                 <div class="opportunity-header">
                                     <div class="opportunity-title">${opp.title}</div>
-                                    <div class="opportunity-volume">${volumeStr}</div>
+                                    <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 8px;">
+                                        <div class="opportunity-volume">${volumeStr}</div>
+                                        ${opp.time_until_match ? `<div style="font-size: 0.85em; color: ${opp.time_until_match_minutes < 0 ? '#ef4444' : opp.time_until_match_minutes < 60 ? '#fbbf24' : '#6ee7b7'}; font-weight: 600;">${opp.time_until_match}</div>` : ''}
+                                        ${opp.match_start_time_formatted ? `<div style="font-size: 0.75em; color: #9ca3af;">${opp.match_start_time_formatted}</div>` : ''}
+                                    </div>
                     </div>
                                 
                                 <div class="opportunity-players">
@@ -1044,9 +1054,17 @@
                     opportunitiesDiv.style.display = 'block';
                 }
             } catch (error) {
+                // Always hide loading spinner on error
                 opportunitiesLoading.style.display = 'none';
-                opportunitiesError.textContent = `Unable to load opportunities: ${error.message}`;
-                opportunitiesError.style.display = 'block';
+                
+                // Only show error on initial load, not on auto-refresh (to avoid spam)
+                if (showLoading) {
+                    opportunitiesError.textContent = `Unable to load opportunities: ${error.message}`;
+                    opportunitiesError.style.display = 'block';
+                } else {
+                    // Silent failure on auto-refresh - keep showing old data
+                    console.warn('Failed to refresh opportunities:', error.message);
+                }
             }
         }
 
@@ -1317,9 +1335,30 @@
             }
         }
         
+        // Auto-refresh opportunities periodically
+        let opportunitiesRefreshInterval = null;
+        
+        function startOpportunitiesRefresh() {
+            // Refresh every 15 seconds (market data service polls every 12s, so 15s gives fresh data)
+            if (opportunitiesRefreshInterval) {
+                clearInterval(opportunitiesRefreshInterval);
+            }
+            opportunitiesRefreshInterval = setInterval(() => {
+                loadOpportunities(false); // false = don't show loading spinner on auto-refresh
+            }, 15000); // 15 seconds
+        }
+        
+        function stopOpportunitiesRefresh() {
+            if (opportunitiesRefreshInterval) {
+                clearInterval(opportunitiesRefreshInterval);
+                opportunitiesRefreshInterval = null;
+            }
+        }
+        
         // Load opportunities when page loads
         document.addEventListener('DOMContentLoaded', () => {
             loadOpportunities();
+            startOpportunitiesRefresh(); // Start auto-refresh
             
             // Trading mode toggle
             const modeToggle = document.getElementById('tradingModeToggle');

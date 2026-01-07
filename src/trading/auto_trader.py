@@ -117,6 +117,10 @@ class AutoTrader:
         self.traded_events = set()  # Set of event_tickers (matches) we've already traded
         self.trade_history = []  # List of all trades placed
         
+        # Cache for match timing from Market Data Service (avoids repeated Kalshi calls)
+        self._cached_match_times = {}  # event_ticker -> timing dict
+        self._market_data_service_url = "http://localhost:5002"
+        
         # Ensure logs directory exists
         Path("logs").mkdir(exist_ok=True)
         
@@ -178,6 +182,44 @@ class AutoTrader:
         if len(parts) == 2:
             return parts[0]  # Everything before last dash
         return None
+    
+    def _get_match_timing_from_service(self, event_ticker: str) -> Optional[Dict[str, Any]]:
+        """
+        Get match timing information from Market Data Service cache.
+        
+        This replaces direct Kalshi API calls for match timing.
+        Uses cached data from the service (no Kalshi calls).
+        
+        Args:
+            event_ticker: Event ticker (e.g., "KXATPMATCH-26JAN03NAVTHO")
+            
+        Returns:
+            Dict with timing fields, or None if not found
+        """
+        # First check our local cache (from last service fetch)
+        if event_ticker in self._cached_match_times:
+            return self._cached_match_times[event_ticker]
+        
+        # If not in cache, fetch from service
+        try:
+            import requests
+            response = requests.get(f"{self._market_data_service_url}/markets", timeout=2)
+            if response.status_code == 200:
+                markets_data = response.json()
+                markets_dict = markets_data.get("markets", {})
+                match_times = markets_dict.get("match_times", {})
+                
+                # Update local cache
+                self._cached_match_times = match_times
+                
+                # Return timing for this event
+                return match_times.get(event_ticker)
+            else:
+                logger.warning(f"Market data service returned status {response.status_code}")
+                return None
+        except Exception as e:
+            logger.error(f"Error fetching match timing from service: {e}")
+            return None
     
     def check_existing_position(self, ticker: str) -> bool:
         """
@@ -257,70 +299,62 @@ class AutoTrader:
         # - Always: at least 10 minutes before match start
         # - No maximum time limit (can trade anytime before match start)
         try:
-            # Get market data to check expiration time
+            # Get match timing from Market Data Service (NO Kalshi call)
             # Extract event_ticker from market ticker (format: SERIES-DATE-EVENT-SUFFIX)
             # e.g., KXATPMATCH-26JAN03NAVTHO-THO -> KXATPMATCH-26JAN03NAVTHO
-            event_ticker = None
-            if ticker and '-' in ticker:
-                parts = ticker.rsplit('-', 1)  # Split on last dash
-                if len(parts) == 2:
-                    event_ticker = parts[0]  # Everything before last dash
-            
-            markets_response = self.client.get_markets(event_ticker=event_ticker, limit=1) if event_ticker else None
-            if not markets_response:
+            event_ticker = self._extract_event_ticker(ticker)
+            if not event_ticker:
+                logger.warning(f"Cannot extract event_ticker from {ticker}, skipping timing check")
                 return None
-            if markets_response.get("markets"):
-                market = markets_response["markets"][0]
-                # CRITICAL: Try to find the actual match start time, not expiration/close time
-                # Expiration times are when the market CLOSES (after match ends), not when match starts
-                # We want the match START time, which should be BEFORE the expiration
-                # Prioritize match START time fields - these are when the match begins
+            
+            # Get timing from service cache (replaces direct Kalshi call)
+            timing_info = self._get_match_timing_from_service(event_ticker)
+            if not timing_info:
+                logger.warning(f"  ⚠️ No timing info found for event {event_ticker} in service cache")
+                return None
+            
+            # CRITICAL: Try to find the actual match start time, not expiration/close time
+            # Expiration times are when the market CLOSES (after match ends), not when match starts
+            # We want the match START time, which should be BEFORE the expiration
+            # Prioritize match START time fields - these are when the match begins
+            
+            close_time = None
+            time_field_used = None
+            
+            # First priority: Match start time fields (these are when the match begins)
+            for field in ["match_start_time", "start_time", "scheduled_time", "expected_start_time"]:
+                time_val = timing_info.get(field)
+                if time_val:
+                    close_time = time_val
+                    time_field_used = field
+                    logger.info(f"  ✅ Using match START time field: {field} = {time_val}")
+                    break
+            
+            # If no match start time found, try to estimate from expiration time
+            # Tennis matches typically last 2-3 hours, so match start ≈ expiration - 2.5 hours
+            if not close_time:
+                expiration_time = timing_info.get("expected_expiration_time") or timing_info.get("expiration_time") or timing_info.get("close_time")
+                if expiration_time:
+                    close_time = expiration_time
+                    time_field_used = "estimated_from_expiration"
+                    logger.warning(f"  ⚠️ No match start time field found. Using expiration time and estimating match start ≈ expiration - 2.5 hours")
+                else:
+                    logger.error(f"  ❌ REJECTED: No match start time or expiration time found for {ticker}. Cannot determine match time.")
+                    logger.error(f"     Available fields: match_start_time={timing_info.get('match_start_time')}, start_time={timing_info.get('start_time')}, scheduled_time={timing_info.get('scheduled_time')}, expected_start_time={timing_info.get('expected_start_time')}")
+                    return None
                 
-                # DEBUG: Log all available time fields
-                logger.info(f"🔍 DEBUG TIME FIELDS for {ticker}:")
-                for field in ["match_start_time", "start_time", "scheduled_time", "expected_start_time", 
-                             "expected_expiration_time", "expiration_time", "close_time", "event_close_time"]:
-                    val = market.get(field)
-                    if val:
-                        logger.info(f"  {field}: {val}")
-                
-                close_time = None
-                time_field_used = None
-                
-                # First priority: Match start time fields (these are when the match begins)
-                for field in ["match_start_time", "start_time", "scheduled_time", "expected_start_time"]:
-                    time_val = market.get(field)
-                    if time_val:
-                        close_time = time_val
-                        time_field_used = field
-                        logger.info(f"  ✅ Using match START time field: {field} = {time_val}")
-                        break
-                
-                # If no match start time found, try to estimate from expiration time
-                # Tennis matches typically last 2-3 hours, so match start ≈ expiration - 2.5 hours
-                if not close_time:
-                    expiration_time = market.get("expected_expiration_time") or market.get("expiration_time") or market.get("close_time")
-                    if expiration_time:
-                        close_time = expiration_time
-                        time_field_used = "estimated_from_expiration"
-                        logger.warning(f"  ⚠️ No match start time field found. Using expiration time and estimating match start ≈ expiration - 2.5 hours")
-                    else:
-                        logger.error(f"  ❌ REJECTED: No match start time or expiration time found for {ticker}. Cannot determine match time.")
-                        logger.error(f"     Available fields: match_start_time={market.get('match_start_time')}, start_time={market.get('start_time')}, scheduled_time={market.get('scheduled_time')}, expected_start_time={market.get('expected_start_time')}")
-                        return None
-                
-                # DEBUG: Log all time fields to see what Kalshi is actually sending
+                # DEBUG: Log all time fields from service cache
                 logger.info(f"🔍 DEBUG TIME PARSING for {ticker}:")
                 logger.info(f"  Time field used: {time_field_used} = {close_time}")
-                logger.info(f"  All available time fields:")
-                logger.info(f"    match_start_time: {market.get('match_start_time')}")
-                logger.info(f"    start_time: {market.get('start_time')}")
-                logger.info(f"    scheduled_time: {market.get('scheduled_time')}")
-                logger.info(f"    expected_start_time: {market.get('expected_start_time')}")
-                logger.info(f"    expected_expiration_time: {market.get('expected_expiration_time')}")
-                logger.info(f"    expiration_time: {market.get('expiration_time')}")
-                logger.info(f"    close_time: {market.get('close_time')}")
-                logger.info(f"    event_close_time: {market.get('event_close_time')}")
+                logger.info(f"  All available time fields from service:")
+                logger.info(f"    match_start_time: {timing_info.get('match_start_time')}")
+                logger.info(f"    start_time: {timing_info.get('start_time')}")
+                logger.info(f"    scheduled_time: {timing_info.get('scheduled_time')}")
+                logger.info(f"    expected_start_time: {timing_info.get('expected_start_time')}")
+                logger.info(f"    expected_expiration_time: {timing_info.get('expected_expiration_time')}")
+                logger.info(f"    expiration_time: {timing_info.get('expiration_time')}")
+                logger.info(f"    close_time: {timing_info.get('close_time')}")
+                logger.info(f"    event_close_time: {timing_info.get('event_close_time')}")
                 
                 if close_time:
                     # CRITICAL: Kalshi API returns times in UTC (with 'Z' suffix)
@@ -599,6 +633,35 @@ class AutoTrader:
         logger.info(f"{'=' * 70}")
         
         try:
+            # Fetch markets from Market Data Service (ONLY place that calls Kalshi)
+            # This ensures run.py never calls Kalshi directly
+            markets = []
+            try:
+                import requests
+                response = requests.get(f"{self._market_data_service_url}/markets", timeout=2)
+                if response.status_code == 200:
+                    markets_data = response.json()
+                    markets_dict = markets_data.get("markets", {})
+                    if isinstance(markets_dict, dict):
+                        markets = markets_dict.get("markets", [])
+                        # Cache match_times for later use (avoids repeated service calls)
+                        match_times = markets_dict.get("match_times", {})
+                        self._cached_match_times = match_times
+                    elif isinstance(markets_dict, list):
+                        markets = markets_dict
+                    else:
+                        markets = []
+                else:
+                    logger.warning(f"Market data service returned status {response.status_code}")
+                    markets = []
+            except Exception as e:
+                logger.error(f"Market data service unavailable: {e}")
+                markets = []
+            
+            # Always pass markets (even if empty) to prevent Kalshi fallback
+            if markets is None:
+                markets = []
+            
             # Scan for tradable opportunities (show_all=True to get rejection reasons)
             # Use debug=True temporarily to see what's happening
             tradable, all_analyses = self.analyzer.scan_markets(
@@ -609,6 +672,7 @@ class AutoTrader:
                 show_all=True,  # Get all analyses to show rejection reasons
                 max_hours_ahead=self.max_hours_ahead,
                 min_volume=self.min_volume,
+                markets=markets  # Pass markets from service (never call Kalshi directly)
             )
             
             # Sort tradable by market volume (descending) - same as opportunities endpoint
@@ -645,41 +709,39 @@ class AutoTrader:
                     reason = analysis.get("reason", "")
                     market_volume = analysis.get("market_volume", 0)
                     
-                    # Get time until match start
+                    # Get time until match start from service cache (NO Kalshi call)
                     time_info = ""
                     try:
-                        # Try to get expiration time from market
                         # Extract event_ticker from market ticker
-                        event_ticker = None
-                        if ticker and '-' in ticker:
-                            parts = ticker.rsplit('-', 1)
-                            if len(parts) == 2:
-                                event_ticker = parts[0]
-                        market_data = self.client.get_markets(event_ticker=event_ticker, limit=1) if event_ticker else None
-                        if not market_data:
+                        event_ticker = self._extract_event_ticker(ticker)
+                        if not event_ticker:
                             continue
-                        if market_data.get("markets"):
-                            market = market_data["markets"][0]
-                            # CRITICAL: Prioritize match START times over expiration/close times
-                            # Expiration times are when the market CLOSES (after match ends), not when match starts
-                            # We want the match START time, which should be BEFORE the expiration
-                            close_time = None
-                            time_field_used = None
-                            
-                            # First priority: Match start time fields (these are when the match begins)
-                            for field in ["match_start_time", "start_time", "scheduled_time", "expected_start_time"]:
-                                time_val = market.get(field)
-                                if time_val:
-                                    close_time = time_val
-                                    time_field_used = field
-                                    break
-                            
-                            # CRITICAL: DO NOT use expiration/close times - they are when the market closes, not when the match starts
-                            # If we can't find a match start time field, we cannot determine when the match actually starts
-                            # Skip this market to avoid incorrect time calculations
-                            if not close_time:
-                                logger.warning(f"  ⚠️ Skipping {ticker}: No match start time field found. Cannot determine actual match start time.")
-                                continue
+                        
+                        # Get timing from service cache (replaces direct Kalshi call)
+                        timing_info = self._get_match_timing_from_service(event_ticker)
+                        if not timing_info:
+                            continue
+                        
+                        # CRITICAL: Prioritize match START times over expiration/close times
+                        # Expiration times are when the market CLOSES (after match ends), not when match starts
+                        # We want the match START time, which should be BEFORE the expiration
+                        close_time = None
+                        time_field_used = None
+                        
+                        # First priority: Match start time fields (these are when the match begins)
+                        for field in ["match_start_time", "start_time", "scheduled_time", "expected_start_time"]:
+                            time_val = timing_info.get(field)
+                            if time_val:
+                                close_time = time_val
+                                time_field_used = field
+                                break
+                        
+                        # CRITICAL: DO NOT use expiration/close times - they are when the market closes, not when the match starts
+                        # If we can't find a match start time field, we cannot determine when the match actually starts
+                        # Skip this market to avoid incorrect time calculations
+                        if not close_time:
+                            logger.warning(f"  ⚠️ Skipping {ticker}: No match start time field found. Cannot determine actual match start time.")
+                            continue
                             
                             if close_time:
                                 # CRITICAL: Kalshi API returns times in UTC (with 'Z' suffix)

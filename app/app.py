@@ -13,12 +13,17 @@ if str(_project_root) not in sys.path:
     sys.path.insert(0, str(_project_root))
 
 from flask import Flask, render_template, request, jsonify
+import requests
 from config.settings import PORT, DEBUG, HOST, MODELS_DIR, RAW_DATA_DIR
 from src.api.player_stats import PlayerStatsDB
 from src.api.predictor import MatchPredictor
 from src.trading.kalshi_client import KalshiClient
 from src.trading.kalshi_analyzer import KalshiMarketAnalyzer
 from src.trading.auto_trader import AutoTrader
+
+# Market Data Service URL (cached Kalshi data)
+# This is the ONLY place that should call Kalshi API
+MARKET_DATA_SERVICE_URL = "http://localhost:5002"
 
 # Initialize Flask app
 # Set template folder relative to project root
@@ -246,6 +251,44 @@ def predict():
     return jsonify(results)
 
 
+@app.route('/api/debug/markets', methods=['GET'])
+def debug_markets():
+    """Debug endpoint to check market data service response."""
+    try:
+        response = requests.get(f"{MARKET_DATA_SERVICE_URL}/markets", timeout=5)
+        if response.status_code == 200:
+            data = response.json()
+            markets_dict = data.get("markets", {})
+            if isinstance(markets_dict, dict):
+                markets = markets_dict.get("markets", [])
+            elif isinstance(markets_dict, list):
+                markets = markets_dict
+            else:
+                markets = []
+            
+            return jsonify({
+                "status": "ok",
+                "service_response_status": response.status_code,
+                "markets_count": len(markets),
+                "markets_structure": type(markets_dict).__name__,
+                "sample_market": markets[0] if markets else None,
+                "full_response_keys": list(data.keys()) if isinstance(data, dict) else None
+            })
+        else:
+            return jsonify({
+                "status": "error",
+                "service_response_status": response.status_code,
+                "error": "Market data service returned non-200 status"
+            }), 500
+    except Exception as e:
+        import traceback
+        return jsonify({
+            "status": "error",
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }), 500
+
+
 @app.route('/api/opportunities', methods=['GET'])
 def get_opportunities():
     """Get top Kalshi trading opportunities ranked by volume and value."""
@@ -261,19 +304,57 @@ def get_opportunities():
     min_volume = int(request.args.get('min_volume', 0))  # Min market volume
     
     try:
-        # Scan markets
-        tradable, _ = kalshi_analyzer.scan_markets(
+        # Fetch markets from Market Data Service (ONLY place that calls Kalshi)
+        # This decouples Kalshi API calls from request handlers
+        markets = []
+        try:
+            response = requests.get(f"{MARKET_DATA_SERVICE_URL}/markets", timeout=5)
+            if response.status_code == 200:
+                markets_data = response.json()
+                # Market data service returns: {"generated_at": ..., "markets": {"markets": [...], "total_count": ..., "enriched_count": ...}}
+                markets_dict = markets_data.get("markets", {})
+                if isinstance(markets_dict, dict):
+                    markets = markets_dict.get("markets", [])
+                elif isinstance(markets_dict, list):
+                    markets = markets_dict
+                
+                import logging
+                logging.info(f"Fetched {len(markets)} markets from market data service")
+            else:
+                import logging
+                logging.error(f"Market data service returned status {response.status_code}")
+        except requests.exceptions.RequestException as e:
+            import logging
+            logging.error(f"Market data service unavailable: {e}")
+        except Exception as e:
+            import logging
+            logging.error(f"Error parsing market data: {e}")
+        
+        # Use markets from service (always pass as list, never None)
+        # CRITICAL: This ensures we NEVER call Kalshi directly from the UI
+        import logging
+        logging.info(f"Starting scan_markets with {len(markets)} markets from service")
+        
+        tradable, all_analyses = kalshi_analyzer.scan_markets(
             limit=max_markets,
             min_value=min_value,
             min_ev=min_ev,
-            debug=False,
+            debug=False,  # Disable debug for faster response
             show_all=False,
             max_hours_ahead=max_hours,
-            min_volume=min_volume
+            min_volume=min_volume,
+            markets=markets  # Always pass markets list (from service or empty)
         )
         
+        logging.info(f"scan_markets returned {len(tradable)} tradable opportunities from {len(markets)} markets")
+        
         if not tradable:
-            return jsonify({"opportunities": []})
+            logging.warning(f"No tradable opportunities found from {len(markets)} markets")
+            return jsonify({
+                "opportunities": [],
+                "total_analyzed": len(markets),
+                "total_tradable": 0
+            })
         
         # Sort by market volume (descending) - top opportunities by volume
         tradable.sort(key=lambda x: x.get("market_volume") or 0, reverse=True)
@@ -305,6 +386,27 @@ def get_opportunities():
                 else:
                     bet_on_player = matched_players[1] if len(matched_players) > 1 else ""
             
+            # Format match time for display
+            match_time_formatted = opp.get("match_start_time_formatted", "")
+            time_until_match_minutes = opp.get("time_until_match_minutes")
+            time_until_match_hours = opp.get("time_until_match_hours")
+            
+            # Format time until match
+            time_until_str = ""
+            if time_until_match_minutes is not None:
+                if time_until_match_minutes < 0:
+                    time_until_str = f"Started {abs(int(time_until_match_minutes))} min ago"
+                elif time_until_match_minutes < 60:
+                    time_until_str = f"In {int(time_until_match_minutes)} min"
+                elif time_until_match_hours < 24:
+                    hours = int(time_until_match_hours)
+                    minutes = int((time_until_match_hours - hours) * 60)
+                    time_until_str = f"In {hours}h {minutes}m"
+                else:
+                    days = int(time_until_match_hours / 24)
+                    hours = int(time_until_match_hours % 24)
+                    time_until_str = f"In {days}d {hours}h"
+            
             opportunities.append({
                 "title": opp.get("title", "Unknown Market"),
                 "ticker": opp.get("ticker", ""),
@@ -328,6 +430,10 @@ def get_opportunities():
                 "bet_on_player": bet_on_player,
                 "market_volume": opp.get("market_volume", 0),
                 "reason": opp.get("reason", ""),
+                "match_start_time": opp.get("match_start_time"),
+                "match_start_time_formatted": match_time_formatted,
+                "time_until_match": time_until_str,
+                "time_until_match_minutes": time_until_match_minutes,
                 # Add parameters for debugging
                 "parameters": {
                     "surface": surface,
@@ -337,12 +443,18 @@ def get_opportunities():
                 }
             })
         
-        return jsonify({"opportunities": opportunities})
+        return jsonify({
+            "opportunities": opportunities,
+            "total_analyzed": len(markets),
+            "total_tradable": len(tradable)
+        })
         
     except Exception as e:
+        import logging
         import traceback
+        logging.error(f"Error in get_opportunities: {e}")
         traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
 
 
 @app.route('/api/trading/start', methods=['POST'])
