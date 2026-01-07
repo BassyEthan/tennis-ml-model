@@ -111,7 +111,10 @@ class AutoTrader:
         self.dry_run = dry_run
         
         # Track trades to avoid duplicates
-        self.traded_markets = set()  # Set of tickers we've already traded
+        # CRITICAL: Track by event_ticker (match), not ticker (YES/NO side)
+        # This prevents placing trades on both YES and NO sides of the same match
+        self.traded_markets = set()  # Set of tickers we've already traded (for backward compatibility)
+        self.traded_events = set()  # Set of event_tickers (matches) we've already traded
         self.trade_history = []  # List of all trades placed
         
         # Ensure logs directory exists
@@ -132,13 +135,13 @@ class AutoTrader:
     
     def calculate_position_size(self, opportunity: Dict[str, Any]) -> int:
         """
-        Calculate position size based on value edge and risk management.
+        Calculate position size - ALWAYS returns 1 contract per trade.
         
         Args:
             opportunity: Opportunity dictionary from analyzer
             
         Returns:
-            Number of contracts to trade (always at least 1 if tradable)
+            Always 1 contract (or 0 if below threshold)
         """
         # Use trade_value which is always positive (abs of value)
         # This ensures we use the actual edge, not the signed value
@@ -148,47 +151,60 @@ class AutoTrader:
             value = opportunity.get("value", 0)
             trade_value = abs(value)
         
-        expected_value = opportunity.get("expected_value", 0)
-        market_volume = opportunity.get("market_volume", 0)
-        
-        # Base position size on trade_value (more edge = larger position)
-        # Scale from 1 to max_position_size based on trade_value
+        # Check if above threshold
         if trade_value < self.min_value_threshold:
             return 0
         
-        # Linear scaling: 2% edge = 1 contract, 10% edge = max_position_size
-        edge_range = 0.10 - self.min_value_threshold  # 0.08 (8%)
-        if edge_range <= 0:
-            edge_range = 0.01
+        # ALWAYS return 1 contract per trade (user requirement)
+        return 1
+    
+    def _extract_event_ticker(self, ticker: str) -> Optional[str]:
+        """
+        Extract event_ticker (match identifier) from market ticker.
         
-        normalized_edge = (trade_value - self.min_value_threshold) / edge_range
-        normalized_edge = max(0, min(1, normalized_edge))  # Clamp to [0, 1]
+        Format: SERIES-DATE-EVENT-SUFFIX -> SERIES-DATE-EVENT
+        Example: KXATPMATCH-26JAN03NAVTHO-THO -> KXATPMATCH-26JAN03NAVTHO
         
-        position_size = int(1 + normalized_edge * (self.max_position_size - 1))
-        
-        # Also consider market volume - don't trade huge positions in low-volume markets
-        if market_volume is not None and market_volume < 5000:
-            position_size = min(position_size, 3)
-        
-        return max(1, min(position_size, self.max_position_size))
+        Args:
+            ticker: Market ticker (e.g., "KXATPMATCH-26JAN03NAVTHO-THO")
+            
+        Returns:
+            Event ticker (match identifier) or None if cannot extract
+        """
+        if not ticker or '-' not in ticker:
+            return None
+        # Split on last dash to remove suffix (YES/NO indicator)
+        parts = ticker.rsplit('-', 1)
+        if len(parts) == 2:
+            return parts[0]  # Everything before last dash
+        return None
     
     def check_existing_position(self, ticker: str) -> bool:
         """
-        Check if we already have a position in this market.
+        Check if we already have a position in this market or any related market (same event).
         
         Args:
             ticker: Market ticker
             
         Returns:
-            True if we already have a position
+            True if we already have a position in this market or any market for the same event
         """
         try:
             positions = self.get_current_positions()
             positions_list = positions.get("positions", [])
             
+            # Extract event_ticker for this ticker
+            event_ticker = self._extract_event_ticker(ticker)
+            
             for pos in positions_list:
-                if pos.get("ticker") == ticker:
+                pos_ticker = pos.get("ticker")
+                if pos_ticker == ticker:
                     return True
+                # Also check if position is in the same event (match)
+                if event_ticker:
+                    pos_event_ticker = self._extract_event_ticker(pos_ticker)
+                    if pos_event_ticker == event_ticker:
+                        return True
             return False
         except Exception as e:
             logger.warning(f"Error checking positions for {ticker}: {e}")
@@ -213,14 +229,27 @@ class AutoTrader:
             logger.error(f"Invalid opportunity: missing ticker or trade_side")
             return None
         
-        # Check if we already traded this market
+        # CRITICAL: Extract event_ticker to prevent trading both YES and NO sides of same match
+        event_ticker = self._extract_event_ticker(ticker)
+        if not event_ticker:
+            logger.warning(f"Cannot extract event_ticker from {ticker}, using ticker as fallback")
+            event_ticker = ticker
+        
+        # Check if we already traded this specific ticker
         if ticker in self.traded_markets:
-            logger.info(f"Skipping {ticker}: already traded")
+            logger.info(f"Skipping {ticker}: already traded this ticker")
             return None
         
-        # Check if we already have a position
+        # CRITICAL: Check if we already traded this event (match) - prevents YES/NO duplicates
+        if event_ticker in self.traded_events:
+            logger.warning(f"🚫 BLOCKED: Skipping {ticker}: already traded event {event_ticker} (preventing duplicate trade on same match)")
+            return None
+        
+        # Check if we already have a position in this market or any market for the same event
         if self.check_existing_position(ticker):
-            logger.info(f"Skipping {ticker}: already have position")
+            logger.warning(f"🚫 BLOCKED: Skipping {ticker}: already have position in this event (preventing duplicate trade)")
+            # Mark event as traded to prevent future attempts
+            self.traded_events.add(event_ticker)
             return None
         
         # CRITICAL: Check if match is within the trading window
@@ -478,6 +507,13 @@ class AutoTrader:
             else:
                 model_prob_bet = model_prob
             
+            # Mark both ticker and event as traded even in dry run (prevents duplicates)
+            self.traded_markets.add(ticker)
+            event_ticker = self._extract_event_ticker(ticker)
+            if event_ticker:
+                self.traded_events.add(event_ticker)
+                logger.info(f"✅ Marked event {event_ticker} as traded (DRY RUN - prevents duplicate trades on same match)")
+            
             return {
                 "ticker": ticker,
                 "order": {
@@ -504,7 +540,12 @@ class AutoTrader:
             order_response = self.client.place_order(**order_data)
             
             logger.info(f"✅ ORDER PLACED SUCCESSFULLY: {order_response}")
+            # Mark both ticker and event as traded to prevent duplicates
             self.traded_markets.add(ticker)
+            event_ticker = self._extract_event_ticker(ticker)
+            if event_ticker:
+                self.traded_events.add(event_ticker)
+                logger.info(f"✅ Marked event {event_ticker} as traded (prevents duplicate trades on same match)")
             
             # Extract player info for display
             players = opportunity.get('matched_players', ('', ''))
