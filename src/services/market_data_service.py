@@ -1,37 +1,18 @@
 """
-Market Data Service - Flask-based caching layer for Kalshi API
+Market Data Service - Service module for Kalshi API caching
 
-ARCHITECTURE OVERVIEW:
-=====================
+This module provides:
+- In-memory cache for market data
+- Background polling thread for Kalshi API
+- Thread-safe cache access
 
-This service decouples Kalshi API calls from the UI and trading engine by:
-
-1. **Background Polling**: A dedicated thread polls Kalshi every 12 seconds
-2. **In-Memory Cache**: Latest market snapshot stored in memory (single source of truth)
-3. **Fast HTTP Endpoints**: Request handlers read from cache only (<5ms response time)
-4. **Thread-Safe**: Single writer (poller) / many readers (request handlers) model
-
-WHY THIS DESIGN:
-===============
-
-**Latency**: Direct Kalshi API calls take 100-500ms. Cached reads take <5ms.
-**Reliability**: API failures don't block request handlers. Cache serves stale data gracefully.
-**Rate Limiting**: Centralized polling prevents exceeding Kalshi rate limits.
-**Separation of Concerns**: UI/trading logic never touches Kalshi SDK directly.
-
-CRITICAL RULE:
-=============
-
-NEVER call Kalshi API inside a request handler. All Kalshi calls happen
-in the background polling thread only. Request handlers are read-only.
+The Flask app factory is in market_data_app.py
 """
 
 import time
 import threading
 import logging
 from typing import Dict, Any, Optional
-from datetime import datetime
-from flask import Flask, jsonify
 
 from src.trading.kalshi_client import KalshiClient, Environment
 from config.settings import (
@@ -41,14 +22,7 @@ from config.settings import (
 )
 
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
 logger = logging.getLogger(__name__)
-
-# Initialize Flask app
-app = Flask(__name__)
 
 # In-memory cache (single source of truth)
 # Structure: {
@@ -77,6 +51,7 @@ _cache_lock = threading.RLock()
 # Background polling control
 _polling_active = threading.Event()
 _polling_thread: Optional[threading.Thread] = None
+_poller_started = False  # Ensure poller starts exactly once
 
 
 def fetch_markets_from_kalshi() -> Optional[Dict[str, Any]]:
@@ -211,8 +186,48 @@ def background_poller():
         _polling_active.wait(12.0)
 
 
+def start_market_data_service():
+    """
+    Start the Market Data Service.
+    
+    This function:
+    1. Performs initial blocking fetch from Kalshi
+    2. Populates cache
+    3. Starts background polling thread (exactly once)
+    
+    This should be called before starting the Flask server.
+    """
+    global _poller_started
+    
+    if _poller_started:
+        logger.warning("Market Data Service already started")
+        return
+    
+    logger.info("Initializing Market Data Service...")
+    
+    # Do initial fetch synchronously (blocking)
+    logger.info("Performing initial market fetch...")
+    markets_data = fetch_markets_from_kalshi()
+    
+    if markets_data:
+        with _cache_lock:
+            global _cache
+            _cache = {
+                "generated_at": time.time(),
+                "markets": markets_data
+            }
+        logger.info("Initial cache populated")
+    else:
+        logger.warning("Initial fetch failed, starting with empty cache")
+    
+    # Start background polling (exactly once)
+    start_background_poller()
+    _poller_started = True
+    logger.info("Market Data Service ready")
+
+
 def start_background_poller():
-    """Start the background polling thread."""
+    """Start the background polling thread (idempotent)."""
     global _polling_thread, _polling_active
     
     if _polling_thread and _polling_thread.is_alive():
@@ -232,79 +247,18 @@ def stop_background_poller():
     logger.info("Background poller stopped")
 
 
-@app.route('/markets', methods=['GET'])
-def get_markets():
+def get_cache_snapshot() -> Dict[str, Any]:
     """
-    Get the full cached market snapshot.
-    
-    Response time: <5ms (reads from memory only)
-    Never calls Kalshi API.
-    
-    PROOF: This function does NOT call fetch_markets_from_kalshi().
-    If you spam /markets, you will NOT see "FETCHING FROM KALSHI" logs.
+    Get a snapshot of the current cache (thread-safe read).
     
     Returns:
-        JSON with cached market data
-    """
-    # Read-only access (no lock needed for reading in Python due to GIL)
-    # But we use lock for safety in case of future changes
-    # NOTE: This is a READ-ONLY operation. We never call Kalshi here.
-    with _cache_lock:
-        cache_copy = _cache.copy()
-    
-    return jsonify(cache_copy)
-
-
-@app.route('/health', methods=['GET'])
-def health_check():
-    """
-    Health check endpoint.
-    
-    Returns:
-        Status, timestamp, and cache age in seconds
+        Copy of the current cache
     """
     with _cache_lock:
-        generated_at = _cache.get("generated_at", 0)
-        age_seconds = int(time.time() - generated_at) if generated_at > 0 else -1
-    
-    return jsonify({
-        "status": "ok",
-        "generated_at": generated_at,
-        "age_seconds": age_seconds,
-        "polling_active": _polling_active.is_set()
-    })
+        return _cache.copy()
 
 
-def initialize_service():
-    """Initialize the service on startup."""
-    logger.info("Initializing Market Data Service...")
-    
-    # Do initial fetch synchronously (blocking)
-    logger.info("Performing initial market fetch...")
-    markets_data = fetch_markets_from_kalshi()
-    
-    if markets_data:
-        with _cache_lock:
-            global _cache
-            _cache = {
-                "generated_at": time.time(),
-                "markets": markets_data
-            }
-        logger.info("Initial cache populated")
-    else:
-        logger.warning("Initial fetch failed, starting with empty cache")
-    
-    # Start background polling
-    start_background_poller()
-    logger.info("Market Data Service ready")
-
-
-if __name__ == '__main__':
-    # Initialize before starting server
-    initialize_service()
-    
-    # Run on port 5002 (5000 often used by AirPlay on macOS, 5001 is main app)
-    port = 5002
-    logger.info(f"Starting Market Data Service on http://localhost:{port}")
-    app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
+def is_polling_active() -> bool:
+    """Check if polling is active."""
+    return _polling_active.is_set()
 
