@@ -262,3 +262,4 @@ def is_polling_active() -> bool:
     """Check if polling is active."""
     return _polling_active.is_set()
 
+

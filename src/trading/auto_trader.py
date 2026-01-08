@@ -5,6 +5,8 @@ Continuously scans for opportunities and places trades when value threshold is m
 
 import time
 import logging
+import json
+import threading
 from typing import Dict, List, Optional, Any
 from datetime import datetime, timedelta, timezone
 try:
@@ -121,12 +123,25 @@ class AutoTrader:
         self._cached_match_times = {}  # event_ticker -> timing dict
         self._market_data_service_url = "http://localhost:5002"
         
+        # Persistence file path
+        self._persistence_file = Path("data/traded_events.json")
+        self._persistence_file.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Background trading loop state
+        self._trading_loop_thread: Optional[threading.Thread] = None
+        self._trading_loop_running = False
+        self._trading_loop_lock = threading.Lock()
+        
         # Ensure logs directory exists
         Path("logs").mkdir(exist_ok=True)
         
+        # Load persisted trade memory and fetch account state on startup
+        self._load_trade_memory()
+        self._sync_account_state()
+        
         logger.info(f"AutoTrader initialized: min_value={min_value_threshold:.1%}, "
                    f"min_ev={min_ev_threshold:.1%}, max_size={max_position_size}, "
-                   f"dry_run={dry_run}")
+                   f"dry_run={dry_run}, traded_events={len(self.traded_events)}")
     
     def get_current_positions(self) -> Dict[str, Any]:
         """Get current positions from Kalshi."""
@@ -136,6 +151,92 @@ class AutoTrader:
         except Exception as e:
             logger.error(f"Error getting positions: {e}")
             return {}
+    
+    def _sync_account_state(self):
+        """
+        Fetch account state from Kalshi on startup.
+        
+        Builds traded_events set from:
+        - Current open positions
+        - Recent executed orders (fills)
+        
+        This ensures we never re-trade events we already have positions in.
+        """
+        logger.info("🔄 Syncing account state from Kalshi...")
+        
+        try:
+            # 1. Get current open positions
+            try:
+                positions_response = self.get_current_positions()
+                positions_list = positions_response.get("positions", [])
+                
+                if positions_list:
+                    logger.info(f"   Found {len(positions_list)} open positions")
+                    for pos in positions_list:
+                        ticker = pos.get("ticker", "")
+                        if ticker:
+                            event_ticker = self._extract_event_ticker(ticker)
+                            if event_ticker:
+                                self.traded_events.add(event_ticker)
+                                logger.info(f"   ✅ Added event {event_ticker} from position: {ticker}")
+                else:
+                    logger.info("   No open positions found")
+            except Exception as e:
+                logger.warning(f"   ⚠️  Error fetching positions: {e}")
+            
+            # 2. Get recent executed orders (fills) - last 50 orders
+            try:
+                orders_response = self.client.get_orders(status="executed", limit=50)
+                orders_list = orders_response.get("orders", [])
+                
+                if orders_list:
+                    logger.info(f"   Found {len(orders_list)} recent executed orders")
+                    for order in orders_list:
+                        ticker = order.get("ticker", "")
+                        if ticker:
+                            event_ticker = self._extract_event_ticker(ticker)
+                            if event_ticker:
+                                self.traded_events.add(event_ticker)
+                                logger.debug(f"   ✅ Added event {event_ticker} from executed order: {ticker}")
+                else:
+                    logger.info("   No recent executed orders found")
+            except Exception as e:
+                logger.warning(f"   ⚠️  Error fetching executed orders: {e}")
+            
+            logger.info(f"   ✅ Account state synced: {len(self.traded_events)} events already traded/held")
+            
+            # Save updated state to persistence
+            self._save_trade_memory()
+            
+        except Exception as e:
+            logger.error(f"❌ Error syncing account state: {e}", exc_info=True)
+    
+    def _load_trade_memory(self):
+        """Load traded events from persistence file."""
+        try:
+            if self._persistence_file.exists():
+                with open(self._persistence_file, 'r') as f:
+                    data = json.load(f)
+                    self.traded_events = set(data.get("traded_events", []))
+                    logger.info(f"📂 Loaded {len(self.traded_events)} traded events from persistence file")
+            else:
+                logger.info("📂 No persistence file found, starting with empty trade memory")
+        except Exception as e:
+            logger.warning(f"⚠️  Error loading trade memory: {e}")
+            self.traded_events = set()
+    
+    def _save_trade_memory(self):
+        """Save traded events to persistence file."""
+        try:
+            data = {
+                "traded_events": list(self.traded_events),
+                "last_updated": datetime.now().isoformat()
+            }
+            with open(self._persistence_file, 'w') as f:
+                json.dump(data, f, indent=2)
+            logger.debug(f"💾 Saved {len(self.traded_events)} traded events to persistence file")
+        except Exception as e:
+            logger.warning(f"⚠️  Error saving trade memory: {e}")
     
     def calculate_position_size(self, opportunity: Dict[str, Any]) -> int:
         """
@@ -518,11 +619,11 @@ class AutoTrader:
         
         # Check dry_run mode
         if self.dry_run:
-            logger.info(f"🧪 DRY RUN: Would place order: {order_data}")
+            logger.info(f"🧪 DRY RUN MODE: Would place order: {order_data}")
             logger.info(f"  Opportunity: {opportunity.get('title', 'Unknown')}")
             logger.info(f"  Value edge: {opportunity.get('trade_value', opportunity.get('value', 0)):.2%}")
             logger.info(f"  Expected value: {opportunity.get('expected_value', 0):.2%}")
-            logger.info(f"  ⚠️ DRY RUN: Order NOT placed (simulation only)")
+            logger.info(f"  ⚠️  DRY RUN: Order NOT placed (simulation only - no real money)")
             # Return a simulated response for dry run
             # Include opportunity data for display
             players = opportunity.get('matched_players', ('', ''))
@@ -546,6 +647,7 @@ class AutoTrader:
             event_ticker = self._extract_event_ticker(ticker)
             if event_ticker:
                 self.traded_events.add(event_ticker)
+                self._save_trade_memory()  # Persist immediately
                 logger.info(f"✅ Marked event {event_ticker} as traded (DRY RUN - prevents duplicate trades on same match)")
             
             return {
@@ -566,7 +668,8 @@ class AutoTrader:
         
         # LIVE TRADING: Place real order
         try:
-            logger.info(f"🔴 LIVE TRADING: Placing REAL order on Kalshi: {order_data}")
+            logger.info(f"🔴 LIVE TRADING MODE: Placing REAL order on Kalshi: {order_data}")
+            logger.info(f"  ⚠️  WARNING: This will place a REAL trade with REAL money!")
             logger.info(f"  Opportunity: {opportunity.get('title', 'Unknown')}")
             logger.info(f"  Value edge: {opportunity.get('trade_value', opportunity.get('value', 0)):.2%}")
             logger.info(f"  Expected value: {opportunity.get('expected_value', 0):.2%}")
@@ -579,6 +682,7 @@ class AutoTrader:
             event_ticker = self._extract_event_ticker(ticker)
             if event_ticker:
                 self.traded_events.add(event_ticker)
+                self._save_trade_memory()  # Persist immediately
                 logger.info(f"✅ Marked event {event_ticker} as traded (prevents duplicate trades on same match)")
             
             # Extract player info for display
@@ -674,6 +778,47 @@ class AutoTrader:
                 min_volume=self.min_volume,
                 markets=markets  # Pass markets from service (never call Kalshi directly)
             )
+            
+            # CRITICAL: Filter out already-traded event_tickers BEFORE ranking
+            # This prevents re-trading events we already have positions in
+            original_count = len(tradable)
+            filtered_tradable = []
+            skipped_traded = 0
+            
+            for opp in tradable:
+                ticker = opp.get("ticker", "")
+                if not ticker:
+                    continue
+                
+                # Extract event_ticker to check if we've already traded this event
+                event_ticker = self._extract_event_ticker(ticker)
+                if not event_ticker:
+                    # If we can't extract event_ticker, use ticker as fallback
+                    event_ticker = ticker
+                
+                # Check if we've already traded this event
+                if event_ticker in self.traded_events:
+                    skipped_traded += 1
+                    logger.debug(f"   🚫 SKIPPING already traded event: {event_ticker} (ticker: {ticker})")
+                    continue
+                
+                # Check if we have an existing position in this event
+                if self.check_existing_position(ticker):
+                    # Mark as traded to prevent future attempts
+                    self.traded_events.add(event_ticker)
+                    self._save_trade_memory()  # Persist immediately
+                    skipped_traded += 1
+                    logger.info(f"   🚫 SKIPPING event with existing position: {event_ticker} (ticker: {ticker})")
+                    continue
+                
+                # Market passed all filters - include it
+                filtered_tradable.append(opp)
+            
+            tradable = filtered_tradable
+            
+            if skipped_traded > 0:
+                logger.info(f"   🔒 Filtered out {skipped_traded} opportunities (already traded/held events)")
+                logger.info(f"   ✅ {len(tradable)} new opportunities remaining (from {original_count} total)")
             
             # Sort tradable by market volume (descending) - same as opportunities endpoint
             tradable.sort(key=lambda x: x.get("market_volume") or 0, reverse=True)
@@ -927,11 +1072,13 @@ class AutoTrader:
                 else:
                     logger.debug(f"   [{i}/{len(top_tradable)}] Skipping {ticker} (below thresholds)")
             
+            mode_indicator = "🧪 DRY RUN" if self.dry_run else "🔴 LIVE"
             logger.info(f"\n{'=' * 70}")
-            logger.info(f"✅ SCAN COMPLETE")
-            logger.info(f"   Trades placed: {len(trades_placed)}/{len(top_tradable)}")
+            logger.info(f"✅ SCAN COMPLETE ({mode_indicator} MODE)")
+            trade_action = "simulated" if self.dry_run else "placed"
+            logger.info(f"   Trades {trade_action}: {len(trades_placed)}/{len(top_tradable)}")
             if trades_placed:
-                logger.info(f"   📋 TRADES EXECUTED:")
+                logger.info(f"   📋 TRADES {'SIMULATED' if self.dry_run else 'EXECUTED'}:")
                 for i, trade in enumerate(trades_placed, 1):
                     ticker = trade.get("ticker", "Unknown")
                     players = trade.get("players", ("", ""))
@@ -944,10 +1091,8 @@ class AutoTrader:
                     match_str = f"{player1} vs {player2}" if player1 != "Unknown" and player2 != "Unknown" else ticker
                     
                     is_dry_run = trade.get("dry_run", self.dry_run)
-                    if is_dry_run:
-                        logger.info(f"      {i}. {match_str} | BET ON: {bet_on_player} | Model Win Rate: {model_prob:.1%}")
-                    else:
-                        logger.info(f"      {i}. {match_str} | BET ON: {bet_on_player} | Model Win Rate: {model_prob:.1%}")
+                    mode_label = "🧪 DRY RUN" if is_dry_run else "🔴 LIVE"
+                    logger.info(f"      {i}. {mode_label} | {match_str} | BET ON: {bet_on_player} | Model Win Rate: {model_prob:.1%}")
             logger.info(f"{'=' * 70}")
             return trades_placed
             
@@ -955,9 +1100,123 @@ class AutoTrader:
             logger.error(f"Error in scan_and_trade: {e}", exc_info=True)
             return []
     
+    def start_trading_loop(self, loop_interval_minutes: int = 15):
+        """
+        Start background trading loop in a separate thread.
+        
+        Args:
+            loop_interval_minutes: Minutes between trading scans (default 15)
+        """
+        with self._trading_loop_lock:
+            if self._trading_loop_running:
+                logger.warning("Trading loop is already running!")
+                return
+            
+            self._trading_loop_running = True
+            self._loop_interval_seconds = loop_interval_minutes * 60
+        
+        def _trading_loop():
+            """Background trading loop worker."""
+            mode_str = "🧪 DRY RUN MODE" if self.dry_run else "🔴 LIVE TRADING MODE"
+            logger.info(f"🔄 Background trading loop started (interval: {loop_interval_minutes} minutes)")
+            logger.info(f"   {mode_str}")
+            logger.info(f"   Traded events memory: {len(self.traded_events)} events")
+            
+            try:
+                while self._trading_loop_running:
+                    loop_start_time = time.time()
+                    
+                    try:
+                        mode_str = "🧪 DRY RUN MODE" if self.dry_run else "🔴 LIVE TRADING MODE"
+                        logger.info(f"\n{'=' * 70}")
+                        logger.info(f"🔄 Automatic trading scan started - {mode_str}")
+                        logger.info(f"{'=' * 70}")
+                        
+                        # Scan and trade
+                        trades = self.scan_and_trade()
+                        
+                        # Log summary with clear mode indication
+                        if trades:
+                            mode_indicator = "🧪 SIMULATED" if self.dry_run else "🔴 LIVE"
+                            logger.info(f"{mode_indicator} Trades {'simulated' if self.dry_run else 'placed'}: {len(trades)}")
+                            for i, trade in enumerate(trades, 1):
+                                ticker = trade.get('ticker', 'Unknown')
+                                players = trade.get('players', ('', ''))
+                                bet_on_player = trade.get('bet_on_player', 'Unknown')
+                                is_trade_dry_run = trade.get('dry_run', self.dry_run)
+                                trade_mode = "🧪 DRY RUN" if is_trade_dry_run else "🔴 LIVE"
+                                logger.info(f"   {i}. {trade_mode} {ticker}: {bet_on_player} (Match: {players[0]} vs {players[1]})")
+                        else:
+                            logger.info(f"ℹ️  No trades {'simulated' if self.dry_run else 'placed'} in this scan")
+                        
+                        logger.info(f"{'=' * 70}\n")
+                        
+                    except Exception as e:
+                        logger.error(f"❌ Error in trading loop scan: {e}", exc_info=True)
+                    
+                    # Calculate sleep time
+                    elapsed = time.time() - loop_start_time
+                    sleep_time = max(0, self._loop_interval_seconds - elapsed)
+                    
+                    # Wait for next scan (but check _trading_loop_running periodically)
+                    if sleep_time > 0:
+                        logger.info(f"💤 Sleeping for {sleep_time/60:.1f} minutes until next scan...")
+                        # Sleep in chunks to allow quick shutdown
+                        chunks = int(sleep_time / 5) + 1
+                        chunk_time = sleep_time / chunks
+                        for _ in range(chunks):
+                            if not self._trading_loop_running:
+                                break
+                            time.sleep(chunk_time)
+                    else:
+                        logger.warning(f"⚠️  Scan took {elapsed/60:.1f} minutes, longer than interval {loop_interval_minutes} minutes")
+                        
+            except KeyboardInterrupt:
+                logger.info("Stopping background trading loop...")
+            except Exception as e:
+                logger.error(f"❌ Fatal error in trading loop: {e}", exc_info=True)
+            finally:
+                with self._trading_loop_lock:
+                    self._trading_loop_running = False
+                logger.info("🛑 Background trading loop stopped")
+        
+        # Start loop in background thread
+        self._trading_loop_thread = threading.Thread(
+            target=_trading_loop,
+            daemon=False,  # Non-daemon so it doesn't exit when main thread exits
+            name="TradingLoop"
+        )
+        self._trading_loop_thread.start()
+        logger.info("✅ Background trading loop thread started")
+    
+    def stop_trading_loop(self):
+        """Stop background trading loop."""
+        with self._trading_loop_lock:
+            if not self._trading_loop_running:
+                logger.info("Trading loop is not running")
+                return
+            
+            logger.info("Stopping background trading loop...")
+            self._trading_loop_running = False
+        
+        # Wait for thread to finish (with timeout)
+        if self._trading_loop_thread and self._trading_loop_thread.is_alive():
+            self._trading_loop_thread.join(timeout=10)
+            if self._trading_loop_thread.is_alive():
+                logger.warning("Trading loop thread did not stop within timeout")
+            else:
+                logger.info("✅ Background trading loop stopped")
+    
+    def is_trading_loop_running(self) -> bool:
+        """Check if background trading loop is running."""
+        with self._trading_loop_lock:
+            return self._trading_loop_running
+    
     def run_continuous(self):
         """
-        Run continuous trading loop.
+        Run continuous trading loop (blocking version, for backward compatibility).
+        
+        NOTE: Prefer start_trading_loop() for non-blocking background execution.
         """
         logger.info("Starting continuous trading loop...")
         logger.info(f"Scan interval: {self.scan_interval} seconds")

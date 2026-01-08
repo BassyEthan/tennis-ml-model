@@ -59,16 +59,20 @@ def initialize_services():
             
             # Initialize auto trader (only if Kalshi is available)
             # Use same thresholds as /api/opportunities for consistency
-            print("Initializing auto trader...")
+            # Default to DRY RUN mode for safety (can be changed via environment variable)
+            dry_run_mode = os.getenv("TRADING_DRY_RUN", "true").lower() == "true"
+            print(f"Initializing auto trader (dry_run={dry_run_mode})...")
             auto_trader = AutoTrader(
                 kalshi_client=kalshi_client,
                 analyzer=kalshi_analyzer,
                 min_value_threshold=0.05,  # 5% edge (same as opportunities endpoint)
                 min_ev_threshold=0.10,     # 10% EV (same as opportunities endpoint)
                 max_hours_ahead=48,        # 2 days (same as opportunities endpoint)
-                min_volume=0               # No minimum (same as opportunities endpoint default)
+                min_volume=0,              # No minimum (same as opportunities endpoint default)
+                dry_run=dry_run_mode       # Use environment variable or default to True
             )
-            print("✅ Auto trader initialized")
+            mode_str = "🧪 DRY RUN" if dry_run_mode else "🔴 LIVE TRADING"
+            print(f"✅ Auto trader initialized ({mode_str} mode)")
         except Exception as e:
             print(f"⚠️  Warning: Kalshi analyzer not available: {e}")
             print("   Opportunities and trading features will be disabled")
@@ -459,7 +463,12 @@ def create_ui_app() -> Flask:
     
     @app.route('/api/trading/start', methods=['POST'])
     def start_trading():
-        """Start automated trading (dry-run or live mode)."""
+        """
+        Manually trigger a single trading scan (dry-run or live mode).
+        
+        NOTE: Automatic trading loop is also running in the background.
+        This endpoint allows manual triggers for testing/debugging.
+        """
         if auto_trader is None:
             return jsonify({"error": "Auto trader not available"}), 503
         
@@ -468,6 +477,9 @@ def create_ui_app() -> Flask:
         
         if mode not in ['dry-run', 'live']:
             return jsonify({"error": "Invalid mode. Must be 'dry-run' or 'live'"}), 400
+        
+        # Check if automatic loop is running
+        loop_running = auto_trader.is_trading_loop_running() if hasattr(auto_trader, 'is_trading_loop_running') else False
         
         try:
             import logging
@@ -588,11 +600,13 @@ def create_ui_app() -> Flask:
                 raise
             
             return jsonify({
-            "status": "completed",
-            "mode": mode,
-            "trades_placed": trades_placed or [],
-            "trades_count": len(trades_placed) if trades_placed else 0,
-                "logs": logs
+                "status": "completed",
+                "mode": mode,
+                "trades_placed": trades_placed or [],
+                "trades_count": len(trades_placed) if trades_placed else 0,
+                "logs": logs,
+                "automatic_loop_running": loop_running,
+                "note": "Automatic trading loop is running in background" if loop_running else "This is a manual trigger (no automatic loop)"
             })
             
         except Exception as e:
@@ -602,5 +616,38 @@ def create_ui_app() -> Flask:
                 "error": str(e),
                 "logs": [{"message": f"❌ Error: {str(e)}", "type": "error"}]
             }), 500
+    
+    @app.route('/api/trading/status', methods=['GET'])
+    def trading_status():
+        """Get status of automatic trading loop."""
+        if auto_trader is None:
+            return jsonify({
+                "available": False,
+                "error": "Auto trader not available"
+            }), 503
+        
+        loop_running = False
+        loop_interval = None
+        traded_events_count = 0
+        
+        try:
+            if hasattr(auto_trader, 'is_trading_loop_running'):
+                loop_running = auto_trader.is_trading_loop_running()
+            if hasattr(auto_trader, '_loop_interval_seconds'):
+                loop_interval = auto_trader._loop_interval_seconds / 60  # Convert to minutes
+            if hasattr(auto_trader, 'traded_events'):
+                traded_events_count = len(auto_trader.traded_events)
+        except Exception:
+            pass
+        
+        return jsonify({
+            "available": True,
+            "loop_running": loop_running,
+            "loop_interval_minutes": loop_interval,
+            "dry_run": auto_trader.dry_run,
+            "traded_events_count": traded_events_count,
+            "min_value_threshold": auto_trader.min_value_threshold,
+            "min_ev_threshold": auto_trader.min_ev_threshold
+        })
     
     return app

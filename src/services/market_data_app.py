@@ -67,3 +67,4 @@ def create_market_data_app() -> Flask:
     
     return app
 
+

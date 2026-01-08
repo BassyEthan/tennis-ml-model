@@ -95,6 +95,14 @@ def signal_handler(signum, frame):
     except Exception as e:
         logger.error(f"Error stopping poller: {e}")
     
+    # Stop trading loop
+    try:
+        from app.app import auto_trader
+        if auto_trader is not None:
+            auto_trader.stop_trading_loop()
+    except Exception as e:
+        logger.error(f"Error stopping trading loop: {e}")
+    
     # Flask apps will stop when threads exit
     logger.info("Shutdown complete")
     sys.exit(0)
@@ -174,6 +182,27 @@ def main():
         _ui_app = ui_app
         _market_data_thread = market_data_thread
         _ui_thread = ui_thread
+        
+        # Step 4: Start automatic trading loop (if auto_trader is available)
+        print("🤖 Step 4: Starting automatic trading loop...")
+        try:
+            # Import auto_trader from UI app (it's initialized there)
+            from app.app import auto_trader
+            
+            if auto_trader is not None:
+                # Start background trading loop (runs every 1 minute for testing)
+                # Can be configured via environment variable: TRADING_LOOP_INTERVAL_MINUTES
+                loop_interval_minutes = int(os.getenv("TRADING_LOOP_INTERVAL_MINUTES", "1"))  # Changed to 1 minute for testing
+                auto_trader.start_trading_loop(loop_interval_minutes=loop_interval_minutes)
+                print(f"   ✅ Automatic trading loop started (interval: {loop_interval_minutes} minute{'s' if loop_interval_minutes != 1 else ''})")
+                print(f"   Dry run mode: {auto_trader.dry_run}")
+            else:
+                print("   ⚠️  Auto trader not available - trading loop skipped")
+        except Exception as e:
+            logger.warning(f"Failed to start trading loop: {e}", exc_info=True)
+            print(f"   ⚠️  Failed to start trading loop: {e}")
+            # Don't fail the entire startup if trading loop fails
+        print()
         
         # Verify threads are still alive
         if not market_data_thread.is_alive():
