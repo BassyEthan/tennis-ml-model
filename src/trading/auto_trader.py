@@ -164,6 +164,11 @@ class AutoTrader:
         """
         logger.info("🔄 Syncing account state from Kalshi...")
         
+        # Track what we're adding for validation
+        positions_added = 0
+        orders_added = 0
+        skipped_invalid = 0
+        
         try:
             # 1. Get current open positions
             try:
@@ -174,11 +179,23 @@ class AutoTrader:
                     logger.info(f"   Found {len(positions_list)} open positions")
                     for pos in positions_list:
                         ticker = pos.get("ticker", "")
-                        if ticker:
-                            event_ticker = self._extract_event_ticker(ticker)
-                            if event_ticker:
+                        if not ticker:
+                            skipped_invalid += 1
+                            logger.debug(f"   ⚠️  Skipping position with no ticker: {pos}")
+                            continue
+                        
+                        event_ticker = self._extract_event_ticker(ticker)
+                        if event_ticker:
+                            # Only add if not already in set (avoid duplicates)
+                            if event_ticker not in self.traded_events:
                                 self.traded_events.add(event_ticker)
+                                positions_added += 1
                                 logger.info(f"   ✅ Added event {event_ticker} from position: {ticker}")
+                            else:
+                                logger.debug(f"   ℹ️  Event {event_ticker} already in traded_events (from position: {ticker})")
+                        else:
+                            skipped_invalid += 1
+                            logger.warning(f"   ⚠️  Could not extract event_ticker from position ticker: {ticker}")
                 else:
                     logger.info("   No open positions found")
             except Exception as e:
@@ -193,17 +210,33 @@ class AutoTrader:
                     logger.info(f"   Found {len(orders_list)} recent executed orders")
                     for order in orders_list:
                         ticker = order.get("ticker", "")
-                        if ticker:
-                            event_ticker = self._extract_event_ticker(ticker)
-                            if event_ticker:
+                        if not ticker:
+                            skipped_invalid += 1
+                            logger.debug(f"   ⚠️  Skipping order with no ticker: {order}")
+                            continue
+                        
+                        event_ticker = self._extract_event_ticker(ticker)
+                        if event_ticker:
+                            # Only add if not already in set (avoid duplicates)
+                            if event_ticker not in self.traded_events:
                                 self.traded_events.add(event_ticker)
-                                logger.debug(f"   ✅ Added event {event_ticker} from executed order: {ticker}")
+                                orders_added += 1
+                                logger.info(f"   ✅ Added event {event_ticker} from executed order: {ticker}")
+                            else:
+                                logger.debug(f"   ℹ️  Event {event_ticker} already in traded_events (from order: {ticker})")
+                        else:
+                            skipped_invalid += 1
+                            logger.warning(f"   ⚠️  Could not extract event_ticker from order ticker: {ticker}")
                 else:
                     logger.info("   No recent executed orders found")
             except Exception as e:
                 logger.warning(f"   ⚠️  Error fetching executed orders: {e}")
             
-            logger.info(f"   ✅ Account state synced: {len(self.traded_events)} events already traded/held")
+            logger.info(f"   ✅ Account state synced:")
+            logger.info(f"      - Events from positions: {positions_added}")
+            logger.info(f"      - Events from orders: {orders_added}")
+            logger.info(f"      - Skipped (invalid): {skipped_invalid}")
+            logger.info(f"      - Total events in memory: {len(self.traded_events)}")
             
             # Save updated state to persistence
             self._save_trade_memory()
@@ -276,13 +309,29 @@ class AutoTrader:
         Returns:
             Event ticker (match identifier) or None if cannot extract
         """
-        if not ticker or '-' not in ticker:
+        if not ticker or not isinstance(ticker, str):
             return None
-        # Split on last dash to remove suffix (YES/NO indicator)
+        
+        # Must have at least one dash to have a suffix
+        if '-' not in ticker:
+            logger.warning(f"⚠️  Ticker has no dashes, cannot extract event_ticker: {ticker}")
+            return None
+        
+        # Split on last dash to remove suffix (YES/NO/THO indicator)
         parts = ticker.rsplit('-', 1)
-        if len(parts) == 2:
-            return parts[0]  # Everything before last dash
-        return None
+        if len(parts) != 2:
+            logger.warning(f"⚠️  Ticker format unexpected, cannot extract event_ticker: {ticker}")
+            return None
+        
+        event_ticker = parts[0]  # Everything before last dash
+        
+        # Validate: event_ticker should have at least 1 dash (SERIES-DATE-EVENT format)
+        # This ensures we're not accidentally using a partial ticker
+        if event_ticker.count('-') < 1:
+            logger.warning(f"⚠️  Extracted event_ticker seems invalid (no dashes): {event_ticker} from {ticker}")
+            return None
+        
+        return event_ticker
     
     def _get_match_timing_from_service(self, event_ticker: str) -> Optional[Dict[str, Any]]:
         """
@@ -375,8 +424,9 @@ class AutoTrader:
         # CRITICAL: Extract event_ticker to prevent trading both YES and NO sides of same match
         event_ticker = self._extract_event_ticker(ticker)
         if not event_ticker:
-            logger.warning(f"Cannot extract event_ticker from {ticker}, using ticker as fallback")
-            event_ticker = ticker
+            logger.error(f"❌ Cannot extract event_ticker from {ticker} - cannot proceed with trade (safety check)")
+            logger.error(f"   This prevents accidentally trading the same match multiple times")
+            return None
         
         # Check if we already traded this specific ticker
         if ticker in self.traded_markets:
@@ -793,22 +843,28 @@ class AutoTrader:
                 # Extract event_ticker to check if we've already traded this event
                 event_ticker = self._extract_event_ticker(ticker)
                 if not event_ticker:
-                    # If we can't extract event_ticker, use ticker as fallback
-                    event_ticker = ticker
+                    # If we can't extract event_ticker, log warning but don't skip
+                    # This allows trading even if extraction fails (safer than blocking)
+                    logger.warning(f"   ⚠️  Could not extract event_ticker from {ticker}, proceeding with caution")
+                    # Don't use ticker as fallback - that could cause false positives
+                    # Instead, skip the duplicate check for this market
+                    event_ticker = None
                 
-                # Check if we've already traded this event
-                if event_ticker in self.traded_events:
+                # Check if we've already traded this event (only if extraction succeeded)
+                if event_ticker and event_ticker in self.traded_events:
                     skipped_traded += 1
-                    logger.debug(f"   🚫 SKIPPING already traded event: {event_ticker} (ticker: {ticker})")
+                    logger.info(f"   🚫 SKIPPING already traded event: {event_ticker} (ticker: {ticker})")
                     continue
                 
                 # Check if we have an existing position in this event
                 if self.check_existing_position(ticker):
-                    # Mark as traded to prevent future attempts
-                    self.traded_events.add(event_ticker)
-                    self._save_trade_memory()  # Persist immediately
+                    # Mark as traded to prevent future attempts (only if we can extract event_ticker)
+                    if event_ticker:
+                        self.traded_events.add(event_ticker)
+                        self._save_trade_memory()  # Persist immediately
                     skipped_traded += 1
-                    logger.info(f"   🚫 SKIPPING event with existing position: {event_ticker} (ticker: {ticker})")
+                    event_display = event_ticker if event_ticker else ticker
+                    logger.info(f"   🚫 SKIPPING event with existing position: {event_display} (ticker: {ticker})")
                     continue
                 
                 # Market passed all filters - include it
@@ -823,9 +879,9 @@ class AutoTrader:
             # Sort tradable by market volume (descending) - same as opportunities endpoint
             tradable.sort(key=lambda x: x.get("market_volume") or 0, reverse=True)
             
-            # Limit to top 5 opportunities (matching opportunities endpoint default)
-            # This ensures live trading matches what's shown in Top Trading Opportunities
-            top_tradable = tradable[:5]
+            # Don't limit to top 5 - we'll trade progressively in batches
+            # This allows trading the next 5 after the top 5 are traded
+            remaining_tradable = tradable
             
             # Log summary
             logger.info(f"\n{'=' * 70}")
@@ -833,15 +889,26 @@ class AutoTrader:
             logger.info(f"{'=' * 70}")
             logger.info(f"   Markets analyzed: {len(all_analyses)}")
             logger.info(f"   Tradable opportunities: {len(tradable)}")
-            logger.info(f"   Top opportunities (by volume): {len(top_tradable)}")
             logger.info(f"   Rejected: {len(all_analyses) - len(tradable)}")
             
-            # Log details for TOP TRADABLE markets only (matching opportunities endpoint)
-            if top_tradable:
+            # Progressive trading: trade in batches of 5, continuing until no more opportunities
+            all_trades_placed = []
+            batch_number = 1
+            batch_size = 5
+            
+            while remaining_tradable:
+                # Get next batch of 5
+                current_batch = remaining_tradable[:batch_size]
+                
+                if not current_batch:
+                    break
+                
                 logger.info(f"\n{'=' * 70}")
-                logger.info(f"💰 TRADABLE OPPORTUNITIES ({len(top_tradable)})")
+                logger.info(f"💰 BATCH {batch_number} - TOP {len(current_batch)} OPPORTUNITIES (by volume)")
                 logger.info(f"{'=' * 70}")
-                for i, analysis in enumerate(top_tradable, 1):
+                
+                # Log details for current batch
+                for i, analysis in enumerate(current_batch, 1):
                     ticker = analysis.get("ticker", "Unknown")
                     title = analysis.get("title", "Unknown Market")
                     players = analysis.get("matched_players", ("", ""))
@@ -1014,70 +1081,115 @@ class AutoTrader:
                             logger.info(f"      Reason: {reason_str}")
                         else:
                             logger.info(f"      Reason: Unknown (check logs for details)")
+                
+                # Place trades for current batch
+                logger.info(f"\n{'=' * 70}")
+                logger.info(f"🔨 TRADING BATCH {batch_number} ({len(current_batch)} opportunities)")
+                logger.info(f"{'=' * 70}")
+                
+                batch_trades = []
+                for i, opp in enumerate(current_batch, 1):
+                    value = opp.get("value", 0)
+                    trade_value = opp.get("trade_value", abs(value))  # Use trade_value (already absolute) if available
+                    ev = opp.get("expected_value", 0)
+                    ticker = opp.get("ticker", "Unknown")
+                    title = opp.get("title", "Unknown")
+                    
+                    if trade_value >= self.min_value_threshold and ev >= self.min_ev_threshold:
+                        # Determine which player we're betting on
+                        bet_on_player = opp.get('bet_on_player')
+                        if not bet_on_player:
+                            players = opp.get('matched_players', ('', ''))
+                            trade_side = opp.get('trade_side', '')
+                            if trade_side == 'yes':
+                                bet_on_player = players[0] if players[0] else "Unknown"
+                            else:
+                                bet_on_player = players[1] if players[1] else "Unknown"
+                        
+                        model_prob = opp.get('model_probability', 0)
+                        kalshi_prob = opp.get('kalshi_probability', 0)
+                        kalshi_odds = opp.get('kalshi_odds', {})
+                        yes_price = kalshi_odds.get('yes_price', 0) if kalshi_odds else 0
+                        no_price = kalshi_odds.get('no_price', 0) if kalshi_odds else 0
+                        
+                        logger.info(f"\n   [{i}/{len(current_batch)}] {title}")
+                        logger.info(f"      Model Probability: {model_prob:.1%} | Kalshi Probability: {kalshi_prob:.1%}")
+                        if yes_price and no_price:
+                            logger.info(f"      Kalshi Odds: YES @ {yes_price:.1f}¢ | NO @ {no_price:.1f}¢")
+                        logger.info(f"      🎯 BET ON: {bet_on_player} @ {yes_price:.1f}¢ | Edge: {trade_value:.1%} | EV: {ev:+.1%}")
+                        trade_result = self.place_trade(opp)
+                        if trade_result:
+                            batch_trades.append(trade_result)
+                            all_trades_placed.append(trade_result)
+                            # Log detailed trade placement info
+                            if self.dry_run:
+                                logger.info(f"      ✅ TRADE SIMULATED (DRY RUN): {bet_on_player} - {ticker}")
+                            else:
+                                order_id = trade_result.get("order", {}).get("order_id", "Unknown")
+                                order_status = trade_result.get("order", {}).get("status", "Unknown")
+                                logger.info(f"      ✅ TRADE PLACED (LIVE): {bet_on_player} - {ticker}")
+                                logger.info(f"         Order ID: {order_id} | Status: {order_status}")
+                        else:
+                            logger.warning(f"      ❌ TRADE FAILED: {bet_on_player} - {ticker}")
+                    else:
+                        logger.debug(f"   [{i}/{len(current_batch)}] Skipping {ticker} (below thresholds)")
+                
+                # Log batch summary
+                mode_indicator = "🧪 DRY RUN" if self.dry_run else "🔴 LIVE"
+                trade_action = "simulated" if self.dry_run else "placed"
+                logger.info(f"\n   ✅ BATCH {batch_number} COMPLETE ({mode_indicator} MODE)")
+                logger.info(f"      Trades {trade_action} in this batch: {len(batch_trades)}/{len(current_batch)}")
+                
+                # After trading this batch, filter out the traded events from the remaining list
+                # This allows the next batch to show the next 5 opportunities (not just skip ahead)
+                # Re-filter the remaining list to exclude newly traded events
+                new_remaining = []
+                for opp in remaining_tradable:  # Check remaining opportunities
+                    ticker = opp.get("ticker", "")
+                    if not ticker:
+                        continue
+                    
+                    event_ticker = self._extract_event_ticker(ticker)
+                    if event_ticker and event_ticker in self.traded_events:
+                        # Skip - already traded (in this batch or previously)
+                        continue
+                    
+                    # Check if we have an existing position
+                    if self.check_existing_position(ticker):
+                        continue
+                    
+                    # Still available - add to next batch's remaining list
+                    new_remaining.append(opp)
+                
+                # Update remaining list for next iteration (already sorted by volume)
+                remaining_tradable = new_remaining
+                
+                # If no trades were placed in this batch, stop (no point continuing)
+                if len(batch_trades) == 0:
+                    logger.info(f"   ⚠️  No trades placed in batch {batch_number}, stopping progressive trading")
+                    break
+                
+                batch_number += 1
+                
+                # Safety limit: don't trade more than 50 opportunities in a single scan
+                if batch_number * batch_size > 50:
+                    logger.info(f"   ⚠️  Reached safety limit of 50 opportunities per scan, stopping")
+                    break
             
-            if not top_tradable:
+            # Final summary
+            if not all_trades_placed:
                 logger.info(f"\n{'=' * 70}")
                 logger.info("⚠️  NO TRADABLE OPPORTUNITIES FOUND")
                 logger.info(f"{'=' * 70}")
                 return []
             
-            # Place trades for top opportunities (matching opportunities endpoint)
-            logger.info(f"\n{'=' * 70}")
-            logger.info(f"🔨 TRADING PHASE ({len(top_tradable)} opportunities)")
-            logger.info(f"{'=' * 70}")
-            
-            trades_placed = []
-            for i, opp in enumerate(top_tradable, 1):
-                value = opp.get("value", 0)
-                trade_value = opp.get("trade_value", abs(value))  # Use trade_value (already absolute) if available
-                ev = opp.get("expected_value", 0)
-                ticker = opp.get("ticker", "Unknown")
-                title = opp.get("title", "Unknown")
-                
-                if trade_value >= self.min_value_threshold and ev >= self.min_ev_threshold:
-                    # Determine which player we're betting on
-                    bet_on_player = opp.get('bet_on_player')
-                    if not bet_on_player:
-                        players = opp.get('matched_players', ('', ''))
-                        trade_side = opp.get('trade_side', '')
-                        if trade_side == 'yes':
-                            bet_on_player = players[0] if players[0] else "Unknown"
-                        else:
-                            bet_on_player = players[1] if players[1] else "Unknown"
-                    
-                    model_prob = opp.get('model_probability', 0)
-                    kalshi_prob = opp.get('kalshi_probability', 0)
-                    kalshi_odds = opp.get('kalshi_odds', {})
-                    yes_price = kalshi_odds.get('yes_price', 0) if kalshi_odds else 0
-                    no_price = kalshi_odds.get('no_price', 0) if kalshi_odds else 0
-                    
-                    logger.info(f"\n   [{i}/{len(top_tradable)}] {title}")
-                    logger.info(f"      Model Probability: {model_prob:.1%} | Kalshi Probability: {kalshi_prob:.1%}")
-                    if yes_price and no_price:
-                        logger.info(f"      Kalshi Odds: YES @ {yes_price:.1f}¢ | NO @ {no_price:.1f}¢")
-                    logger.info(f"      🎯 BET ON: {bet_on_player} @ {yes_price:.1f}¢ | Edge: {trade_value:.1%} | EV: {ev:+.1%}")
-                    trade_result = self.place_trade(opp)
-                    if trade_result:
-                        trades_placed.append(trade_result)
-                        # Log detailed trade placement info
-                        if self.dry_run:
-                            logger.info(f"      ✅ TRADE SIMULATED (DRY RUN): {bet_on_player} - {ticker}")
-                        else:
-                            order_id = trade_result.get("order", {}).get("order_id", "Unknown")
-                            order_status = trade_result.get("order", {}).get("status", "Unknown")
-                            logger.info(f"      ✅ TRADE PLACED (LIVE): {bet_on_player} - {ticker}")
-                            logger.info(f"         Order ID: {order_id} | Status: {order_status}")
-                    else:
-                        logger.warning(f"      ❌ TRADE FAILED: {bet_on_player} - {ticker}")
-                else:
-                    logger.debug(f"   [{i}/{len(top_tradable)}] Skipping {ticker} (below thresholds)")
-            
             mode_indicator = "🧪 DRY RUN" if self.dry_run else "🔴 LIVE"
             logger.info(f"\n{'=' * 70}")
             logger.info(f"✅ SCAN COMPLETE ({mode_indicator} MODE)")
             trade_action = "simulated" if self.dry_run else "placed"
-            logger.info(f"   Trades {trade_action}: {len(trades_placed)}/{len(top_tradable)}")
-            if trades_placed:
+            logger.info(f"   Total batches traded: {batch_number}")
+            logger.info(f"   Total trades {trade_action}: {len(all_trades_placed)}")
+            if all_trades_placed:
                 logger.info(f"   📋 TRADES {'SIMULATED' if self.dry_run else 'EXECUTED'}:")
                 for i, trade in enumerate(trades_placed, 1):
                     ticker = trade.get("ticker", "Unknown")
@@ -1094,7 +1206,7 @@ class AutoTrader:
                     mode_label = "🧪 DRY RUN" if is_dry_run else "🔴 LIVE"
                     logger.info(f"      {i}. {mode_label} | {match_str} | BET ON: {bet_on_player} | Model Win Rate: {model_prob:.1%}")
             logger.info(f"{'=' * 70}")
-            return trades_placed
+            return all_trades_placed
             
         except Exception as e:
             logger.error(f"Error in scan_and_trade: {e}", exc_info=True)
